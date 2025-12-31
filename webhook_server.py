@@ -24,7 +24,15 @@ CORS(app, resources={
 })
 
 # Initialize managers
-agent_manager = ElevenLabsAgentManager()
+# ElevenLabs agent manager is optional (only needed for automated agent creation)
+# For beta testing, we create agents manually in ElevenLabs UI
+try:
+    agent_manager = ElevenLabsAgentManager()
+except ValueError:
+    agent_manager = None
+    print("⚠️  ElevenLabs API key not set - automated agent creation disabled")
+    print("   (This is fine for beta testing where agents are created manually)")
+
 conversation_analyzer = ConversationAnalyzer()
 beta_manager = BetaTesterManager()
 health_analyzer = HealthTrendAnalyzer()
@@ -459,6 +467,14 @@ def create_agent_from_signup():
         
         print(f"\n🎯 Creating agent for beta signup: {user_profile.get('theirName')}")
         
+        # Check if automated agent creation is available
+        if agent_manager is None:
+            return jsonify({
+                'success': False,
+                'error': 'Automated agent creation not available. Please create agents manually in ElevenLabs UI.',
+                'message': 'For beta testing, create the agent manually and use /api/beta/link-agent to connect it.'
+            }), 503
+        
         # Create ElevenLabs agent
         agent_info = agent_manager.create_agent(user_profile)
         
@@ -631,11 +647,14 @@ Total conversations: 0
             f.write(updated_kb)
         
         # Upload updated knowledge base to ElevenLabs (if possible)
-        try:
-            agent_manager.update_agent_after_conversation(agent_id, updated_kb)
-        except Exception as e:
-            print(f"   ⚠️  Could not upload to ElevenLabs: {e}")
-            print(f"   💡 Knowledge base saved locally, will need manual upload")
+        if agent_manager is not None:
+            try:
+                agent_manager.update_agent_after_conversation(agent_id, updated_kb)
+            except Exception as e:
+                print(f"   ⚠️  Could not upload to ElevenLabs: {e}")
+                print(f"   💡 Knowledge base saved locally, will need manual upload")
+        else:
+            print(f"   ℹ️  ElevenLabs API not configured - knowledge base saved locally only")
         
         # Generate family update
         family_update = conversation_analyzer.generate_family_update(
