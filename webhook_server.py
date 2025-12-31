@@ -407,6 +407,9 @@ def get_agent_id(beta_id):
     Called by /talk/[betaId] page to load the correct agent
     """
     try:
+        # Normalize beta_id to uppercase (BT001, BT002, etc.)
+        beta_id = beta_id.upper()
+        
         print(f"\n🔍 Agent ID requested for: {beta_id}")
         
         tester = beta_manager.registry['testers'].get(beta_id)
