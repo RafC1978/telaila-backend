@@ -1238,14 +1238,24 @@ def reset_all_beta_data():
                 if conv_dir.exists():
                     conversation_count += len(list(conv_dir.glob('*.json')))
         
-        # Delete everything
+        # Delete all contents but keep the directory (for Railway volumes)
         import shutil
-        shutil.rmtree(beta_dir)
+        for item in beta_dir.iterdir():
+            if item.is_file():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
         
-        # Recreate empty directory structure
-        beta_dir.mkdir(exist_ok=True)
+        # Create fresh registry
+        new_registry = {
+            "next_id": 1,
+            "testers": {}
+        }
         
-        # Reinitialize the beta manager (creates new registry)
+        with open(registry_file, 'w') as f:
+            json.dump(new_registry, f, indent=2)
+        
+        # Reinitialize the beta manager
         global beta_manager
         beta_manager = BetaTesterManager()
         
