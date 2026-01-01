@@ -1183,6 +1183,93 @@ def get_session_info():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/admin/reset-all-beta-data', methods=['POST'])
+def reset_all_beta_data():
+    """
+    ADMIN ONLY: Reset all beta tester data
+    
+    THIS WILL DELETE:
+    - All beta tester registrations
+    - All conversation histories
+    - All knowledge bases
+    - All family updates
+    
+    Requires confirmation parameter to prevent accidents
+    
+    Usage:
+    POST /api/admin/reset-all-beta-data
+    Body: {"confirm": "RESET_ALL_DATA"}
+    """
+    try:
+        data = request.json
+        
+        if not data or data.get('confirm') != 'RESET_ALL_DATA':
+            return jsonify({
+                'error': 'Confirmation required',
+                'message': 'Send {"confirm": "RESET_ALL_DATA"} to confirm deletion',
+                'warning': 'This will permanently delete all beta tester data!'
+            }), 400
+        
+        print("\n⚠️  RESETTING ALL BETA DATA...")
+        
+        # Get beta_testers directory
+        beta_dir = Path("beta_testers")
+        
+        if not beta_dir.exists():
+            return jsonify({
+                'success': True,
+                'message': 'No beta data exists yet'
+            })
+        
+        # Count what we're deleting
+        registry_file = beta_dir / "registry.json"
+        tester_count = 0
+        conversation_count = 0
+        
+        if registry_file.exists():
+            with open(registry_file, 'r') as f:
+                registry = json.load(f)
+                tester_count = len(registry.get('testers', {}))
+        
+        # Count conversations
+        for tester_dir in beta_dir.iterdir():
+            if tester_dir.is_dir() and tester_dir.name.startswith('BT'):
+                conv_dir = tester_dir / 'conversations'
+                if conv_dir.exists():
+                    conversation_count += len(list(conv_dir.glob('*.json')))
+        
+        # Delete everything
+        import shutil
+        shutil.rmtree(beta_dir)
+        
+        # Recreate empty directory structure
+        beta_dir.mkdir(exist_ok=True)
+        
+        # Reinitialize the beta manager (creates new registry)
+        global beta_manager
+        beta_manager = BetaTesterManager()
+        
+        print(f"   ✅ Deleted {tester_count} beta testers")
+        print(f"   ✅ Deleted {conversation_count} conversations")
+        print(f"   ✅ Reset complete - ready for fresh start")
+        
+        return jsonify({
+            'success': True,
+            'message': 'All beta data has been reset',
+            'deleted': {
+                'beta_testers': tester_count,
+                'conversations': conversation_count
+            },
+            'status': 'System ready for fresh beta testing'
+        })
+    
+    except Exception as e:
+        print(f"❌ Error resetting data: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     print("\n" + "=" * 70)
     print("  TelAila Companion AI Server - Beta Testing System")
