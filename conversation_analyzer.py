@@ -79,39 +79,42 @@ Extract the following information:
    - Positive moments to share
    - Recommended actions
 
-Return your analysis in this JSON format:
+Return your analysis as VALID JSON ONLY. No markdown, no code blocks, no comments.
+
+Use this exact structure:
 {{
   "health": {{
-    "pain": [...]  # List of pain mentions with details
-    "sleep": {{...}}  # Sleep patterns
-    "appetite": {{...}}
-    "energy": "description or 1-5",
-    "mood": "positive/negative/neutral with context",
-    "medications": [...],
-    "red_flags": [...],  # Any urgent concerns
-    "summary": "Overall health impression"
+    "pain": [],
+    "sleep": {{}},
+    "appetite": {{}},
+    "energy": "",
+    "mood": "",
+    "medications": [],
+    "red_flags": [],
+    "summary": ""
   }},
   "biography": {{
-    "stories": [...],  # Full story excerpts with quotes
-    "sensory_details": [...],  # Vivid details to preserve
-    "people": [...],  # Names and relationships
-    "timeline_events": [...]  # Dated or dateable events
+    "stories": [],
+    "sensory_details": [],
+    "people": [],
+    "timeline_events": []
   }},
   "conversation": {{
-    "mood": "positive/neutral/negative",
-    "engagement": "high/moderate/low",
-    "topics": [...],
-    "memorable_quotes": [...],
-    "follow_ups": [...]
+    "mood": "",
+    "engagement": "",
+    "topics": [],
+    "memorable_quotes": [],
+    "follow_ups": []
   }},
   "family_dashboard": {{
-    "health_summary": "...",
-    "notable_moments": [...],
-    "concerns": [...],
-    "recommendations": [...]
+    "health_summary": "",
+    "notable_moments": [],
+    "concerns": [],
+    "recommendations": []
   }}
 }}
 
+CRITICAL: Return ONLY the JSON object above. No explanation, no code blocks, no comments.
 Be thorough but accurate. Only include what was actually mentioned in the conversation."""
 
         try:
@@ -125,18 +128,32 @@ Be thorough but accurate. Only include what was actually mentioned in the conver
             )
             
             # Extract JSON from response
-            analysis_text = response.content[0].text
+            analysis_text = response.content[0].text.strip()
             
-            # Try to parse JSON (might be wrapped in markdown code blocks)
-            analysis_text = analysis_text.strip()
+            # Remove markdown code blocks if present
             if analysis_text.startswith("```json"):
                 analysis_text = analysis_text[7:]
-            if analysis_text.startswith("```"):
+            elif analysis_text.startswith("```"):
                 analysis_text = analysis_text[3:]
+            
             if analysis_text.endswith("```"):
                 analysis_text = analysis_text[:-3]
             
-            analysis = json.loads(analysis_text.strip())
+            # Remove any trailing/leading whitespace
+            analysis_text = analysis_text.strip()
+            
+            # Try to parse JSON
+            try:
+                analysis = json.loads(analysis_text)
+            except json.JSONDecodeError as je:
+                print(f"⚠️  JSON parsing error: {je}")
+                print(f"   First 200 chars of response: {analysis_text[:200]}")
+                # Try to extract JSON if it's embedded in text
+                json_match = re.search(r'\{.*\}', analysis_text, re.DOTALL)
+                if json_match:
+                    analysis = json.loads(json_match.group(0))
+                else:
+                    raise je
             
             print("✅ Conversation analyzed")
             
