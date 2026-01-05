@@ -13,6 +13,7 @@ from elevenlabs_agent_manager import ElevenLabsAgentManager
 from conversation_analyzer import ConversationAnalyzer
 from beta_tester_manager import BetaTesterManager
 from health_trend_analyzer import HealthTrendAnalyzer
+from family_dashboard_generator import FamilyDashboardGenerator
 
 app = Flask(__name__)
 CORS(app, resources={
@@ -36,6 +37,7 @@ except ValueError:
 conversation_analyzer = ConversationAnalyzer()
 beta_manager = BetaTesterManager()
 health_analyzer = HealthTrendAnalyzer()
+dashboard_generator = FamilyDashboardGenerator(beta_manager)
 
 # Storage for active biographer sessions
 sessions = {}
@@ -1181,6 +1183,51 @@ def get_session_info():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/family-dashboard/<beta_id>', methods=['GET'])
+def get_family_dashboard(beta_id):
+    """
+    Get comprehensive family dashboard for a beta tester
+    
+    Returns:
+        JSON with:
+        - Weekly summary (conversation count, mood, engagement)
+        - Health insights (patterns, concerns, trends)
+        - Recent conversations (last 3 with highlights)
+        - Memorable quotes
+        - Biography progress
+        - Alerts for family
+        - Trend data for charts
+        - Recommendations
+    
+    Example:
+        GET /api/family-dashboard/BT001
+    """
+    try:
+        beta_id = beta_id.upper()
+        
+        print(f"\n📊 Generating family dashboard for {beta_id}...")
+        
+        # Generate the dashboard
+        dashboard = dashboard_generator.generate_dashboard(beta_id)
+        
+        if not dashboard.get('success'):
+            print(f"❌ Dashboard generation failed: {dashboard.get('error')}")
+            return jsonify(dashboard), 404
+        
+        print(f"✅ Dashboard generated successfully")
+        print(f"   Total conversations analyzed: {dashboard['summary']['total_conversations']}")
+        print(f"   Health insights: {len(dashboard['health_insights'].get('active_concerns', []))} concerns")
+        print(f"   Alerts: {len(dashboard['alerts'])} active alerts")
+        
+        return jsonify(dashboard)
+    
+    except Exception as e:
+        print(f"❌ Error generating dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/admin/reset-all-beta-data', methods=['POST'])
