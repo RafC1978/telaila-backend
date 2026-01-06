@@ -94,7 +94,7 @@ def get_knowledge_base(agent_id):
         if tester:
             # Beta tester - use their folder
             beta_id = tester['beta_id']
-            kb_file = beta_manager.get_tester_data_path(beta_id, "conversations") / f"{agent_id}_knowledge_base.txt"
+            kb_file = beta_manager.get_tester_data_path(beta_id, "knowledge_base.md")
             print(f"   📁 Beta tester: {beta_id}")
         else:
             # Legacy path
@@ -105,13 +105,19 @@ def get_knowledge_base(agent_id):
             with open(kb_file, 'r', encoding='utf-8') as f:
                 knowledge_base = f.read()
             
+            # Count sessions for conversation count
+            conversation_count = knowledge_base.count('### Session')
+            is_first = conversation_count == 0
+            
             print(f"   ✅ Found existing knowledge base ({len(knowledge_base)} chars)")
+            print(f"   📊 Conversation count: {conversation_count}")
             
             return jsonify({
                 'success': True,
                 'agent_id': agent_id,
                 'knowledge_base': knowledge_base,
-                'conversation_count': knowledge_base.count('### Session')
+                'conversation_count': conversation_count,
+                'is_first_conversation': is_first
             })
         else:
             # Return empty/default knowledge base for first conversation
