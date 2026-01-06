@@ -495,8 +495,8 @@ def elevenlabs_conversation_ended():
         # Analyze conversation
         # Load existing knowledge base
         if beta_id:
-            # Use beta tester folder structure
-            kb_file = beta_manager.get_tester_data_path(beta_id, "conversations") / f"{agent_id}_knowledge_base.txt"
+            # Use beta tester folder structure - save as knowledge_base.md
+            kb_file = beta_manager.get_tester_data_path(beta_id, "knowledge_base.md")
         else:
             # Legacy path
             kb_file = Path(f"knowledge_bases/{agent_id}.txt")
@@ -554,6 +554,42 @@ Total conversations: 0
         with open(kb_file, 'w', encoding='utf-8') as f:
             f.write(updated_kb)
         
+        print(f"   📝 Updating knowledge base for {user_name}...")
+        print(f"   ✅ Knowledge base updated ({len(updated_kb)} chars)")
+        
+        # SAVE CONVERSATION DATA FOR DASHBOARD
+        if beta_id:
+            # Save complete conversation data as JSON for dashboard
+            conversation_data = {
+                'conversation_id': conversation_id,
+                'agent_id': agent_id,
+                'timestamp': datetime.now().isoformat(),
+                'transcript': transcript,
+                'analysis': analysis,
+                'user_name': user_name,
+                'beta_id': beta_id
+            }
+            
+            # Save to conversations folder
+            conv_folder = beta_manager.get_tester_data_path(beta_id, "conversations")
+            conv_folder.mkdir(parents=True, exist_ok=True)
+            
+            conv_file = conv_folder / f"{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.json"
+            with open(conv_file, 'w', encoding='utf-8') as f:
+                json.dump(conversation_data, f, indent=2)
+            
+            print(f"   💾 Conversation saved: {conv_file.name}")
+            
+            # Also save transcript as text file
+            transcript_folder = beta_manager.get_tester_data_path(beta_id, "transcripts")
+            transcript_folder.mkdir(parents=True, exist_ok=True)
+            
+            transcript_file = transcript_folder / f"{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}.txt"
+            with open(transcript_file, 'w', encoding='utf-8') as f:
+                f.write(transcript)
+            
+            print(f"   📄 Transcript saved: {transcript_file.name}")
+        
         # Upload updated knowledge base to ElevenLabs (if possible)
         if agent_manager is not None:
             try:
@@ -565,11 +601,14 @@ Total conversations: 0
             print(f"   ℹ️  ElevenLabs API not configured - knowledge base saved locally only")
         
         # Generate family update
+        print(f"   📊 Generating family update...")
         family_update = conversation_analyzer.generate_family_update(
             analysis=analysis,
             user_name=user_name,
             family_name=family_name
         )
+        
+        print(f"   ✅ Family update generated - Alert level: {family_update.get('alert_level', 'N/A')}")
         
         # Save family update
         if beta_id:
