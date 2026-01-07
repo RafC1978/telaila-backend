@@ -149,6 +149,7 @@ class BetaTesterManager:
     
     def get_tester_by_agent_id(self, agent_id):
         """Get beta tester info by agent ID"""
+        self._load_registry()  # Reload to get latest
         for beta_id, tester in self.registry['testers'].items():
             if tester.get('agent_id') == agent_id:
                 return tester
@@ -163,6 +164,7 @@ class BetaTesterManager:
     
     def get_all_testers(self):
         """Get all beta testers (for admin dashboard)"""
+        self._load_registry()  # Reload to get latest
         return self.registry['testers']
     
     def get_tester_data_path(self, beta_id, data_type):

@@ -27,6 +27,9 @@ class FamilyDashboardGenerator:
         Returns:
             Dict with all dashboard data
         """
+        # Reload registry to get latest beta testers
+        self.beta_manager._load_registry()
+        
         # Get beta tester info
         tester = self.beta_manager.registry['testers'].get(beta_id)
         
