@@ -284,7 +284,7 @@ class FamilyDashboardGenerator:
             'categories': dict(story_categories),
             'knowledge_base_sections': kb_sections,
             'knowledge_base_words': kb_words,
-            'completeness_estimate': min(100, (total_stories * 10) + (kb_sections * 5)),  # Rough estimate
+            'completeness_estimate': min(100, (total_stories * 2) + (kb_sections * 0.5)),  # More realistic: ~50 stories = 100%
             'next_areas_to_explore': self._suggest_biography_areas(conversations)
         }
     
@@ -316,30 +316,46 @@ class FamilyDashboardGenerator:
         """Identify important things family should know"""
         alerts = []
         
+        # Keywords that indicate false alarms (technical issues, not real health concerns)
+        false_alarm_keywords = [
+            'technical', 'ai', 'repetition', 'glitch', 'error', 'system',
+            'connectivity', 'internet', 'network', 'response', 'processing',
+            'lag', 'delay', 'timeout', 'crashed', 'frozen', 'bug'
+        ]
+        
+        def is_false_alarm(message):
+            """Check if concern is actually a technical issue, not health"""
+            if not message:
+                return True
+            message_lower = message.lower()
+            return any(keyword in message_lower for keyword in false_alarm_keywords)
+        
         for conv in conversations:
             analysis = conv.get('analysis', {})
             
-            # Check for red flags
+            # Check for red flags (but filter out false alarms)
             red_flags = analysis.get('health', {}).get('red_flags', [])
             for flag in red_flags:
-                alerts.append({
-                    'type': 'health_concern',
-                    'severity': 'high',
-                    'message': flag,
-                    'date': conv.get('timestamp', ''),
-                    'action_needed': True
-                })
+                if not is_false_alarm(flag):
+                    alerts.append({
+                        'type': 'health_concern',
+                        'severity': 'high',
+                        'message': flag,
+                        'date': conv.get('timestamp', ''),
+                        'action_needed': True
+                    })
             
-            # Check family dashboard concerns
+            # Check family dashboard concerns (but filter out false alarms)
             dashboard_concerns = analysis.get('family_dashboard', {}).get('concerns', [])
             for concern in dashboard_concerns:
-                alerts.append({
-                    'type': 'general_concern',
-                    'severity': 'medium',
-                    'message': concern,
-                    'date': conv.get('timestamp', ''),
-                    'action_needed': False
-                })
+                if not is_false_alarm(concern):
+                    alerts.append({
+                        'type': 'general_concern',
+                        'severity': 'medium',
+                        'message': concern,
+                        'date': conv.get('timestamp', ''),
+                        'action_needed': False
+                    })
         
         # Return most recent 5 alerts
         return sorted(alerts, key=lambda x: x.get('date', ''), reverse=True)[:5]
@@ -350,14 +366,27 @@ class FamilyDashboardGenerator:
         # Mood trend over time
         mood_timeline = []
         for conv in conversations:
-            mood = conv.get('analysis', {}).get('conversation', {}).get('mood', 'neutral')
+            mood_raw = conv.get('analysis', {}).get('conversation', {}).get('mood', 'neutral')
             date = conv.get('timestamp', '')
             
-            mood_score = {'positive': 3, 'neutral': 2, 'negative': 1}.get(mood, 2)
+            # Parse mood - handle both simple and descriptive moods
+            mood_lower = mood_raw.lower() if mood_raw else 'neutral'
+            
+            # Determine mood score from descriptive text
+            if any(word in mood_lower for word in ['positive', 'happy', 'good', 'cheerful', 'upbeat', 'joyful']):
+                mood_score = 3
+                mood_category = 'positive'
+            elif any(word in mood_lower for word in ['negative', 'sad', 'upset', 'down', 'depressed', 'anxious', 'worried', 'emotional', 'distressed']):
+                mood_score = 1
+                mood_category = 'negative'
+            else:
+                mood_score = 2
+                mood_category = 'neutral'
             
             mood_timeline.append({
                 'date': date,
-                'mood': mood,
+                'mood': mood_category,  # Simplified category
+                'mood_raw': mood_raw,  # Keep original for reference
                 'mood_score': mood_score
             })
         
@@ -367,7 +396,7 @@ class FamilyDashboardGenerator:
             engagement = conv.get('analysis', {}).get('conversation', {}).get('engagement', 'moderate')
             date = conv.get('timestamp', '')
             
-            engagement_score = {'high': 3, 'moderate': 2, 'low': 1}.get(engagement, 2)
+            engagement_score = {'high': 3, 'moderate': 2, 'low': 1}.get(engagement.lower() if engagement else 'moderate', 2)
             
             engagement_timeline.append({
                 'date': date,

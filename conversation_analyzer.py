@@ -56,6 +56,7 @@ Extract the following information:
    - Mobility or fall concerns
    - Bathroom/urinary issues if mentioned
    - Any RED FLAG concerns (chest pain, severe symptoms, suicidal thoughts, falls)
+   - IMPORTANT: DO NOT flag technical issues as health concerns (AI repetition, glitches, connectivity problems, system errors are NOT health red flags)
 
 2. BIOGRAPHY CONTENT:
    - Life stories shared (with full details and quotes)
@@ -75,9 +76,10 @@ Extract the following information:
 
 4. FAMILY INSIGHTS:
    - Anything family should know
-   - Concerns or needs identified
+   - Concerns or needs identified (ONLY real health/wellbeing concerns, NOT technical issues)
    - Positive moments to share
    - Recommended actions
+   - NOTE: Do not flag AI/technical issues (repetition, glitches, errors) as concerns
 
 Return your analysis as VALID JSON ONLY. No markdown, no code blocks, no comments.
 
