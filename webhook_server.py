@@ -211,7 +211,6 @@ def get_single_conversation(beta_id, session_number):
 
 @app.route('/api/knowledge-base/<agent_id>', methods=['GET'])
 def get_knowledge_base(agent_id):
-def get_knowledge_base(agent_id):
     """
     Serve knowledge base to ElevenLabs
     Called by ElevenLabs workflow at conversation start
