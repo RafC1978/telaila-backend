@@ -77,7 +77,140 @@ def save_sessions():
 load_sessions()
 
 
+@app.route('/api/beta/transcripts/<beta_id>', methods=['GET'])
+def get_beta_transcripts(beta_id):
+    """
+    Get all conversation transcripts for a beta tester
+    
+    GET /api/beta/transcripts/BT001
+    
+    Returns list of all conversations with transcripts
+    """
+    try:
+        beta_id = beta_id.upper()
+        print(f"\n📄 Transcripts requested for: {beta_id}")
+        
+        tester = beta_manager.registry['testers'].get(beta_id)
+        
+        if not tester:
+            return jsonify({'success': False, 'error': 'Beta tester not found'}), 404
+        
+        # Get all conversation files
+        conversations_path = beta_manager.get_tester_data_path(beta_id, "conversations")
+        transcripts_path = beta_manager.get_tester_data_path(beta_id, "transcripts")
+        
+        all_conversations = []
+        
+        if conversations_path.exists():
+            for conv_file in sorted(conversations_path.glob("*.json")):
+                try:
+                    with open(conv_file, 'r', encoding='utf-8') as f:
+                        conv_data = json.load(f)
+                    
+                    # Get corresponding transcript if exists
+                    transcript_file = transcripts_path / f"{conv_file.stem}.txt"
+                    transcript_text = ""
+                    if transcript_file.exists():
+                        with open(transcript_file, 'r', encoding='utf-8') as f:
+                            transcript_text = f.read()
+                    
+                    all_conversations.append({
+                        'filename': conv_file.name,
+                        'timestamp': conv_data.get('timestamp'),
+                        'conversation_id': conv_data.get('conversation_id'),
+                        'transcript': transcript_text or conv_data.get('transcript', ''),
+                        'analysis': conv_data.get('analysis', {})
+                    })
+                    
+                except Exception as e:
+                    print(f"⚠️  Could not load {conv_file.name}: {e}")
+        
+        print(f"   ✅ Found {len(all_conversations)} conversations")
+        
+        return jsonify({
+            'success': True,
+            'beta_id': beta_id,
+            'elder_name': tester['signup_data']['theirName'],
+            'total_conversations': len(all_conversations),
+            'conversations': all_conversations
+        })
+    
+    except Exception as e:
+        print(f"❌ Error getting transcripts: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/beta/conversation/<beta_id>/<int:session_number>', methods=['GET'])
+def get_single_conversation(beta_id, session_number):
+    """
+    Get a specific conversation by session number
+    
+    GET /api/beta/conversation/BT001/1
+    
+    Returns the first conversation (session 1)
+    """
+    try:
+        beta_id = beta_id.upper()
+        print(f"\n📄 Conversation {session_number} requested for: {beta_id}")
+        
+        tester = beta_manager.registry['testers'].get(beta_id)
+        
+        if not tester:
+            return jsonify({'success': False, 'error': 'Beta tester not found'}), 404
+        
+        # Get all conversation files
+        conversations_path = beta_manager.get_tester_data_path(beta_id, "conversations")
+        
+        if not conversations_path.exists():
+            return jsonify({'success': False, 'error': 'No conversations found'}), 404
+        
+        # Get sorted list of conversation files
+        conv_files = sorted(conversations_path.glob("*.json"))
+        
+        if session_number < 1 or session_number > len(conv_files):
+            return jsonify({
+                'success': False, 
+                'error': f'Session {session_number} not found. Valid range: 1-{len(conv_files)}'
+            }), 404
+        
+        # Get the requested conversation (session_number is 1-indexed)
+        conv_file = conv_files[session_number - 1]
+        
+        with open(conv_file, 'r', encoding='utf-8') as f:
+            conv_data = json.load(f)
+        
+        # Get corresponding transcript
+        transcripts_path = beta_manager.get_tester_data_path(beta_id, "transcripts")
+        transcript_file = transcripts_path / f"{conv_file.stem}.txt"
+        
+        transcript_text = ""
+        if transcript_file.exists():
+            with open(transcript_file, 'r', encoding='utf-8') as f:
+                transcript_text = f.read()
+        
+        print(f"   ✅ Returning session {session_number}")
+        
+        return jsonify({
+            'success': True,
+            'beta_id': beta_id,
+            'session_number': session_number,
+            'timestamp': conv_data.get('timestamp'),
+            'conversation_id': conv_data.get('conversation_id'),
+            'transcript': transcript_text or conv_data.get('transcript', ''),
+            'analysis': conv_data.get('analysis', {})
+        })
+    
+    except Exception as e:
+        print(f"❌ Error getting conversation: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/knowledge-base/<agent_id>', methods=['GET'])
+def get_knowledge_base(agent_id):
 def get_knowledge_base(agent_id):
     """
     Serve knowledge base to ElevenLabs
