@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import defaultdict
+import pytz
 
 class FamilyDashboardGenerator:
     """
@@ -14,8 +15,49 @@ class FamilyDashboardGenerator:
     for a specific beta tester
     """
     
-    def __init__(self, beta_tester_manager):
-        self.beta_manager = beta_tester_manager
+    def __init__(self, beta_manager):
+        self.beta_manager = beta_manager
+        # Set timezone for Vancouver, BC (PST/PDT)
+        self.local_tz = pytz.timezone('America/Vancouver')
+    
+    def _to_local_time(self, timestamp_str):
+        """Convert UTC timestamp to Vancouver local time (PST/PDT)"""
+        try:
+            # Parse the timestamp (assuming it's in UTC or naive)
+            dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            
+            # If naive (no timezone), assume UTC
+            if dt.tzinfo is None:
+                dt = pytz.utc.localize(dt)
+            
+            # Convert to Vancouver time
+            local_dt = dt.astimezone(self.local_tz)
+            return local_dt
+        except Exception as e:
+            print(f"⚠️ Error converting timestamp: {e}")
+            # Fallback to original
+            return datetime.fromisoformat(timestamp_str)
+    
+    def _calculate_duration(self, transcript):
+        """Estimate conversation duration from transcript"""
+        if not transcript:
+            return "Unknown"
+        
+        # Count turns in conversation
+        turns = transcript.count('\nAila:') + transcript.count('\nUser:')
+        
+        # Rough estimate: average 30 seconds per turn
+        estimated_seconds = turns * 30
+        
+        # Convert to minutes
+        minutes = estimated_seconds // 60
+        
+        if minutes < 1:
+            return "< 1 minute"
+        elif minutes == 1:
+            return "1 minute"
+        else:
+            return f"{minutes} minutes"
     
     def generate_dashboard(self, beta_id):
         """
@@ -107,8 +149,13 @@ class FamilyDashboardGenerator:
                 'status': 'waiting_for_first_call'
             }
         
-        # Calculate date range
-        dates = [datetime.fromisoformat(c['timestamp']) for c in conversations if 'timestamp' in c]
+        # Calculate date range (convert to PST)
+        dates = []
+        for c in conversations:
+            if 'timestamp' in c:
+                local_dt = self._to_local_time(c['timestamp'])
+                dates.append(local_dt)
+        
         first_conversation = min(dates) if dates else None
         last_conversation = max(dates) if dates else None
         
@@ -134,8 +181,9 @@ class FamilyDashboardGenerator:
         
         dominant_mood = max(mood_counts, key=mood_counts.get)
         
-        # Time since last conversation
-        days_since_last = (datetime.now() - last_conversation).days if last_conversation else 0
+        # Time since last conversation (use PST for current time)
+        now_pst = datetime.now(self.local_tz)
+        days_since_last = (now_pst - last_conversation).days if last_conversation else 0
         
         return {
             'total_conversations': total_conversations,
@@ -223,12 +271,23 @@ class FamilyDashboardGenerator:
             analysis = conv.get('analysis', {})
             conversation_data = analysis.get('conversation', {})
             
+            # Convert timestamp to PST
+            if 'timestamp' in conv:
+                local_time = self._to_local_time(conv['timestamp'])
+                date_str = local_time.strftime('%B %d, %Y %I:%M %p')
+            else:
+                date_str = 'Unknown'
+            
+            # Calculate actual duration from transcript
+            transcript = conv.get('transcript', '')
+            duration = self._calculate_duration(transcript)
+            
             summaries.append({
-                'date': datetime.fromisoformat(conv['timestamp']).strftime('%B %d, %Y %I:%M %p') if 'timestamp' in conv else 'Unknown',
+                'date': date_str,
                 'topics': conversation_data.get('topics', []),
                 'mood': conversation_data.get('mood', 'neutral'),
                 'engagement': conversation_data.get('engagement', 'moderate'),
-                'duration_estimate': '10-15 minutes',  # Could calculate from transcript
+                'duration_estimate': duration,
                 'highlights': conversation_data.get('follow_ups', [])[:2]  # First 2 follow-ups
             })
         
@@ -243,9 +302,16 @@ class FamilyDashboardGenerator:
             quotes = analysis.get('conversation', {}).get('memorable_quotes', [])
             
             for quote in quotes:
+                # Convert timestamp to PST
+                if 'timestamp' in conv:
+                    local_time = self._to_local_time(conv['timestamp'])
+                    date_str = local_time.strftime('%B %d, %Y')
+                else:
+                    date_str = 'Unknown'
+                
                 all_quotes.append({
                     'quote': quote,
-                    'date': datetime.fromisoformat(conv['timestamp']).strftime('%B %d, %Y') if 'timestamp' in conv else 'Unknown',
+                    'date': date_str,
                     'context': 'From conversation'  # Could be enhanced
                 })
         
