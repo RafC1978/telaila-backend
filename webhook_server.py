@@ -14,6 +14,8 @@ from conversation_analyzer import ConversationAnalyzer
 from beta_tester_manager import BetaTesterManager
 from health_trend_analyzer import HealthTrendAnalyzer
 from family_dashboard_generator import FamilyDashboardGenerator
+from memory_manager import MemoryManager
+from biography_builder import BiographyBuilder
 
 app = Flask(__name__)
 CORS(app, resources={
@@ -38,6 +40,8 @@ conversation_analyzer = ConversationAnalyzer()
 beta_manager = BetaTesterManager()
 health_analyzer = HealthTrendAnalyzer()
 dashboard_generator = FamilyDashboardGenerator(beta_manager)
+memory_manager = MemoryManager()
+biography_builder = BiographyBuilder(beta_manager)
 
 # Storage for active biographer sessions
 sessions = {}
@@ -216,9 +220,15 @@ def get_knowledge_base(agent_id):
     Called by ElevenLabs workflow at conversation start
     
     Returns the current knowledge base for the agent
+    
+    Query params:
+    - optimized=true: Return compressed context (core facts + recent only)
     """
     try:
         print(f"\n📚 Knowledge base requested for agent: {agent_id}")
+        
+        # Check if optimized mode requested
+        optimized_mode = request.args.get('optimized', 'false').lower() == 'true'
         
         # Try to find beta tester
         tester = beta_manager.get_tester_by_agent_id(agent_id)
@@ -227,10 +237,12 @@ def get_knowledge_base(agent_id):
             # Beta tester - use their folder
             beta_id = tester['beta_id']
             kb_file = beta_manager.get_tester_data_path(beta_id, "knowledge_base.md")
+            user_name = tester['signup_data']['theirName']
             print(f"   📁 Beta tester: {beta_id}")
         else:
             # Legacy path
             kb_file = Path(f"knowledge_bases/{agent_id}.txt")
+            user_name = "them"
             print(f"   📁 Legacy path")
         
         if kb_file.exists():
@@ -244,12 +256,20 @@ def get_knowledge_base(agent_id):
             print(f"   ✅ Found existing knowledge base ({len(knowledge_base)} chars)")
             print(f"   📊 Conversation count: {conversation_count}")
             
+            # If optimized mode, return compressed context
+            if optimized_mode:
+                print(f"   🚀 Building optimized context...")
+                optimized_context = memory_manager.build_optimized_context(knowledge_base, user_name)
+                print(f"   ✅ Optimized: {len(knowledge_base)} → {len(optimized_context)} chars ({100 - int(len(optimized_context)/len(knowledge_base)*100)}% reduction)")
+                knowledge_base = optimized_context
+            
             return jsonify({
                 'success': True,
                 'agent_id': agent_id,
                 'knowledge_base': knowledge_base,
                 'conversation_count': conversation_count,
-                'is_first_conversation': is_first
+                'is_first_conversation': is_first,
+                'optimized': optimized_mode
             })
         else:
             # Return empty/default knowledge base for first conversation
@@ -694,6 +714,15 @@ Total conversations: 0
         
         print(f"   📝 Updating knowledge base for {user_name}...")
         print(f"   ✅ Knowledge base updated ({len(updated_kb)} chars)")
+        
+        # AUTOMATIC COMPRESSION (Cost Optimization)
+        # Check if knowledge base is getting too large and compress if needed
+        compressed_kb, should_save = memory_manager.manage_knowledge_base(updated_kb, user_name)
+        if should_save:
+            with open(kb_file, 'w', encoding='utf-8') as f:
+                f.write(compressed_kb)
+            print(f"   🗜️  Knowledge base compressed and saved")
+            updated_kb = compressed_kb  # Use compressed version going forward
         
         # SAVE CONVERSATION DATA FOR DASHBOARD
         if beta_id:
@@ -1305,6 +1334,84 @@ def get_family_dashboard(beta_id):
     
     except Exception as e:
         print(f"❌ Error generating dashboard: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/biography/<beta_id>', methods=['GET'])
+def get_full_biography(beta_id):
+    """
+    Get FULL biography built from complete conversation archive
+    
+    This uses the full conversation JSON files (never compressed)
+    to preserve all the "color" and detail for biography generation
+    
+    Returns:
+        JSON with:
+        - All stories (with full details and sensory information)
+        - Character map (all people mentioned)
+        - Timeline of life events
+        - Themes and patterns
+        - Quotes in full context
+    
+    Example:
+        GET /api/biography/BT001
+    """
+    try:
+        beta_id = beta_id.upper()
+        
+        print(f"\n📖 Generating full biography for {beta_id}...")
+        
+        biography = biography_builder.build_biography(beta_id)
+        
+        print(f"✅ Biography generated")
+        print(f"   Total stories: {biography['total_stories']}")
+        print(f"   Total people: {len(biography['people'])}")
+        print(f"   Word count: {biography['word_count']}")
+        print(f"   Data source: {biography['data_source']}")
+        
+        return jsonify({
+            'success': True,
+            'beta_id': beta_id,
+            'biography': biography
+        })
+    
+    except Exception as e:
+        print(f"❌ Error generating biography: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/biography/<beta_id>/export', methods=['GET'])
+def export_biography_document(beta_id):
+    """
+    Export full biography as a formatted document
+    
+    Query params:
+        format: 'markdown' (default) or 'json'
+    
+    Example:
+        GET /api/biography/BT001/export?format=markdown
+    """
+    try:
+        beta_id = beta_id.upper()
+        format_type = request.args.get('format', 'markdown')
+        
+        print(f"\n📄 Exporting biography for {beta_id} as {format_type}...")
+        
+        document = biography_builder.export_biography_document(beta_id, format=format_type)
+        
+        if format_type == 'markdown':
+            return document, 200, {'Content-Type': 'text/markdown; charset=utf-8'}
+        elif format_type == 'json':
+            return document, 200, {'Content-Type': 'application/json; charset=utf-8'}
+        else:
+            return jsonify({'success': False, 'error': f'Unsupported format: {format_type}'}), 400
+    
+    except Exception as e:
+        print(f"❌ Error exporting biography: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
