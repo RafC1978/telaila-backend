@@ -393,7 +393,15 @@ class FamilyDashboardGenerator:
             """Check if concern is actually a technical issue, not health"""
             if not message:
                 return True
-            message_lower = message.lower()
+            
+            # Handle both string and dict formats
+            if isinstance(message, dict):
+                # If it's a dict, extract the text content
+                message_text = message.get('concern') or message.get('message') or message.get('text') or str(message)
+            else:
+                message_text = str(message)
+            
+            message_lower = message_text.lower()
             return any(keyword in message_lower for keyword in false_alarm_keywords)
         
         for conv in conversations:
@@ -403,10 +411,16 @@ class FamilyDashboardGenerator:
             red_flags = analysis.get('health', {}).get('red_flags', [])
             for flag in red_flags:
                 if not is_false_alarm(flag):
+                    # Extract message text from dict or use string directly
+                    if isinstance(flag, dict):
+                        message_text = flag.get('concern') or flag.get('message') or flag.get('text') or str(flag)
+                    else:
+                        message_text = str(flag)
+                    
                     alerts.append({
                         'type': 'health_concern',
                         'severity': 'high',
-                        'message': flag,
+                        'message': message_text,
                         'date': conv.get('timestamp', ''),
                         'action_needed': True
                     })
@@ -415,10 +429,16 @@ class FamilyDashboardGenerator:
             dashboard_concerns = analysis.get('family_dashboard', {}).get('concerns', [])
             for concern in dashboard_concerns:
                 if not is_false_alarm(concern):
+                    # Extract message text from dict or use string directly
+                    if isinstance(concern, dict):
+                        message_text = concern.get('concern') or concern.get('message') or concern.get('text') or str(concern)
+                    else:
+                        message_text = str(concern)
+                    
                     alerts.append({
                         'type': 'general_concern',
                         'severity': 'medium',
-                        'message': concern,
+                        'message': message_text,
                         'date': conv.get('timestamp', ''),
                         'action_needed': False
                     })
