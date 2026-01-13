@@ -21,7 +21,7 @@ app = Flask(__name__)
 CORS(app, resources={
     r"/api/*": {
         "origins": "*",
-        "methods": ["GET", "POST", "OPTIONS"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type"]
     }
 })
@@ -85,10 +85,6 @@ load_sessions()
 def get_beta_transcripts(beta_id):
     """
     Get all conversation transcripts for a beta tester
-    
-    GET /api/beta/transcripts/BT001
-    
-    Returns list of all conversations with transcripts
     """
     try:
         beta_id = beta_id.upper()
@@ -99,7 +95,6 @@ def get_beta_transcripts(beta_id):
         if not tester:
             return jsonify({'success': False, 'error': 'Beta tester not found'}), 404
         
-        # Get all conversation files
         conversations_path = beta_manager.get_tester_data_path(beta_id, "conversations")
         transcripts_path = beta_manager.get_tester_data_path(beta_id, "transcripts")
         
@@ -111,7 +106,6 @@ def get_beta_transcripts(beta_id):
                     with open(conv_file, 'r', encoding='utf-8') as f:
                         conv_data = json.load(f)
                     
-                    # Get corresponding transcript if exists
                     transcript_file = transcripts_path / f"{conv_file.stem}.txt"
                     transcript_text = ""
                     if transcript_file.exists():
@@ -148,13 +142,7 @@ def get_beta_transcripts(beta_id):
 
 @app.route('/api/beta/conversation/<beta_id>/<int:session_number>', methods=['GET'])
 def get_single_conversation(beta_id, session_number):
-    """
-    Get a specific conversation by session number
-    
-    GET /api/beta/conversation/BT001/1
-    
-    Returns the first conversation (session 1)
-    """
+    """Get a specific conversation by session number"""
     try:
         beta_id = beta_id.upper()
         print(f"\n📄 Conversation {session_number} requested for: {beta_id}")
@@ -164,13 +152,11 @@ def get_single_conversation(beta_id, session_number):
         if not tester:
             return jsonify({'success': False, 'error': 'Beta tester not found'}), 404
         
-        # Get all conversation files
         conversations_path = beta_manager.get_tester_data_path(beta_id, "conversations")
         
         if not conversations_path.exists():
             return jsonify({'success': False, 'error': 'No conversations found'}), 404
         
-        # Get sorted list of conversation files
         conv_files = sorted(conversations_path.glob("*.json"))
         
         if session_number < 1 or session_number > len(conv_files):
@@ -179,13 +165,11 @@ def get_single_conversation(beta_id, session_number):
                 'error': f'Session {session_number} not found. Valid range: 1-{len(conv_files)}'
             }), 404
         
-        # Get the requested conversation (session_number is 1-indexed)
         conv_file = conv_files[session_number - 1]
         
         with open(conv_file, 'r', encoding='utf-8') as f:
             conv_data = json.load(f)
         
-        # Get corresponding transcript
         transcripts_path = beta_manager.get_tester_data_path(beta_id, "transcripts")
         transcript_file = transcripts_path / f"{conv_file.stem}.txt"
         
@@ -215,32 +199,20 @@ def get_single_conversation(beta_id, session_number):
 
 @app.route('/api/knowledge-base/<agent_id>', methods=['GET'])
 def get_knowledge_base(agent_id):
-    """
-    Serve knowledge base to ElevenLabs
-    Called by ElevenLabs workflow at conversation start
-    
-    Returns the current knowledge base for the agent
-    
-    Query params:
-    - optimized=true: Return compressed context (core facts + recent only)
-    """
+    """Serve knowledge base to ElevenLabs"""
     try:
         print(f"\n📚 Knowledge base requested for agent: {agent_id}")
         
-        # Check if optimized mode requested
         optimized_mode = request.args.get('optimized', 'false').lower() == 'true'
         
-        # Try to find beta tester
         tester = beta_manager.get_tester_by_agent_id(agent_id)
         
         if tester:
-            # Beta tester - use their folder
             beta_id = tester['beta_id']
             kb_file = beta_manager.get_tester_data_path(beta_id, "knowledge_base.md")
             user_name = tester['signup_data']['theirName']
             print(f"   📁 Beta tester: {beta_id}")
         else:
-            # Legacy path
             kb_file = Path(f"knowledge_bases/{agent_id}.txt")
             user_name = "them"
             print(f"   📁 Legacy path")
@@ -249,18 +221,16 @@ def get_knowledge_base(agent_id):
             with open(kb_file, 'r', encoding='utf-8') as f:
                 knowledge_base = f.read()
             
-            # Count sessions for conversation count
             conversation_count = knowledge_base.count('### Session')
             is_first = conversation_count == 0
             
             print(f"   ✅ Found existing knowledge base ({len(knowledge_base)} chars)")
             print(f"   📊 Conversation count: {conversation_count}")
             
-            # If optimized mode, return compressed context
             if optimized_mode:
                 print(f"   🚀 Building optimized context...")
                 optimized_context = memory_manager.build_optimized_context(knowledge_base, user_name)
-                print(f"   ✅ Optimized: {len(knowledge_base)} → {len(optimized_context)} chars ({100 - int(len(optimized_context)/len(knowledge_base)*100)}% reduction)")
+                print(f"   ✅ Optimized: {len(knowledge_base)} → {len(optimized_context)} chars")
                 knowledge_base = optimized_context
             
             return jsonify({
@@ -272,10 +242,8 @@ def get_knowledge_base(agent_id):
                 'optimized': optimized_mode
             })
         else:
-            # Return empty/default knowledge base for first conversation
             print(f"   ℹ️  No existing knowledge base - returning default")
             
-            # Get user name if we have it
             user_name = "them"
             if tester:
                 user_name = tester['signup_data']['theirName']
@@ -292,18 +260,6 @@ Recent mood: Unknown (getting to know {user_name})
 
 ## Conversation Summaries
 (Will be updated after each conversation)
-
-## Full Conversation Transcripts
-(Will be stored after each conversation)
-
-## Topics for Future Reminiscence
-(Will be identified from conversations)
-
-## Health Timeline
-(Will be tracked from natural conversation)
-
-## Biography Building Blocks
-(Will emerge from their stories)
 """
             
             return jsonify({
@@ -323,48 +279,18 @@ Recent mood: Unknown (getting to know {user_name})
 
 @app.route('/api/beta/register', methods=['POST'])
 def register_beta_tester():
-    """
-    Register a new beta tester from Lovable signup form
-    
-    Called by Lovable when user submits beta signup
-    
-    Expected from Lovable (ALL fields):
-    {
-        "theirName": "Margaret Thompson",
-        "yourName": "Susan",
-        "yourEmail": "susan@example.com",
-        "yourPhone": "555-123-4567",
-        "relationship": "daughter",
-        "theirAge": "82",
-        "primaryLanguage": "English",
-        "secondaryLanguage": "Spanish",
-        "bestTime": "morning",
-        "specialNotes": "..."
-    }
-    
-    Returns registration confirmation and instructions
-    """
+    """Register a new beta tester from Lovable signup form"""
     try:
         signup_data = request.json
         
         print(f"\n🎯 New beta tester registration")
         print(f"   Elder: {signup_data.get('theirName')} (Age: {signup_data.get('theirAge', 'N/A')})")
         print(f"   Family: {signup_data.get('yourName')} ({signup_data.get('yourEmail')})")
-        print(f"   Phone: {signup_data.get('yourPhone', 'N/A')}")
-        print(f"   Relationship: {signup_data.get('relationship', 'N/A')}")
-        print(f"   Languages: {signup_data.get('primaryLanguage', 'N/A')}, {signup_data.get('secondaryLanguage', 'None')}")
-        print(f"   Best Time: {signup_data.get('bestTime', 'N/A')}")
-        print(f"   Special Notes: {signup_data.get('specialNotes', 'None')[:50]}...")
         
-        # Register the tester (stores ALL signup_data)
         result = beta_manager.register_beta_tester(signup_data)
-        
-        # Generate setup email content (for manual sending or future automation)
         email_content = beta_manager.generate_setup_email(result['beta_id'])
         
         print(f"   ✅ Registered as: {result['beta_id']}")
-        print(f"   📧 Setup email generated")
-        print(f"   ⏳ Status: Pending manual agent setup")
         
         return jsonify({
             'success': True,
@@ -384,17 +310,7 @@ def register_beta_tester():
 
 @app.route('/api/beta/link-agent', methods=['POST'])
 def link_agent_to_tester():
-    """
-    Admin endpoint: Link an ElevenLabs agent to a beta tester
-    
-    After manually creating agent in ElevenLabs UI, call this to link it
-    
-    POST /api/beta/link-agent
-    {
-        "beta_id": "BT001",
-        "agent_id": "agent_3601kdkj0jp7e9h912zrk5fyraxy"
-    }
-    """
+    """Link an ElevenLabs agent to a beta tester"""
     try:
         data = request.json
         beta_id = data.get('beta_id')
@@ -414,42 +330,30 @@ def link_agent_to_tester():
 
 @app.route('/api/beta/testers', methods=['GET'])
 def get_all_beta_testers():
-    """
-    Admin endpoint: Get all beta testers and their status
-    
-    Returns list of all registered testers with setup status and full signup data
-    """
+    """Get all beta testers and their status"""
     try:
         testers = beta_manager.get_all_testers()
         
-        # Format for display
         tester_list = []
         for beta_id, tester in testers.items():
-            signup = tester['signup_data']
+            signup = tester.get('signup_data', {})
             tester_list.append({
                 'beta_id': beta_id,
-                'status': tester['status'],
+                'status': tester.get('status', 'unknown'),
                 'agent_id': tester.get('agent_id'),
                 'conversation_count': tester.get('conversation_count', 0),
-                'registered_at': tester['registered_at'],
-                
-                # Elder info
+                'registered_at': tester.get('registered_at'),
                 'elder_name': signup.get('theirName'),
                 'elder_age': signup.get('theirAge'),
-                
-                # Family info
                 'family_name': signup.get('yourName'),
                 'family_email': signup.get('yourEmail'),
                 'family_phone': signup.get('yourPhone'),
                 'relationship': signup.get('relationship'),
-                
-                # Language & timing
                 'primary_language': signup.get('primaryLanguage'),
                 'secondary_language': signup.get('secondaryLanguage'),
                 'best_time': signup.get('bestTime'),
-                
-                # Notes
-                'special_notes': signup.get('specialNotes')
+                'special_notes': signup.get('specialNotes'),
+                'signup_data': signup
             })
         
         return jsonify({
@@ -465,24 +369,16 @@ def get_all_beta_testers():
 
 @app.route('/api/beta/agent-id/<beta_id>', methods=['GET'])
 def get_agent_id(beta_id):
-    """
-    Get agent_id for beta tester's conversation page
-    Called by /talk/[betaId] page to load the correct agent
-    """
+    """Get agent_id for beta tester's conversation page"""
     try:
-        # Normalize beta_id to uppercase (BT001, BT002, etc.)
         beta_id = beta_id.upper()
-        
         print(f"\n🔍 Agent ID requested for: {beta_id}")
         
         tester = beta_manager.registry['testers'].get(beta_id)
         
         if not tester:
             print(f"   ❌ Beta tester not found: {beta_id}")
-            return jsonify({
-                'success': False,
-                'error': 'Beta tester not found'
-            }), 404
+            return jsonify({'success': False, 'error': 'Beta tester not found'}), 404
         
         if not tester.get('agent_id'):
             print(f"   ⏳ Agent not yet linked for: {beta_id}")
@@ -512,40 +408,202 @@ def get_agent_id(beta_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/beta/create-agent', methods=['POST'])
-def create_agent_from_signup():
+# ============================================
+# ADMIN ENDPOINTS FOR TESTER MANAGEMENT
+# ============================================
+
+@app.route('/api/beta/tester/<beta_id>', methods=['GET'])
+def get_beta_tester(beta_id):
+    """Get a specific beta tester's info"""
+    try:
+        beta_id = beta_id.upper()
+        beta_manager._load_registry()
+        tester = beta_manager.registry['testers'].get(beta_id)
+        
+        if not tester:
+            return jsonify({'error': 'Tester not found', 'beta_id': beta_id}), 404
+        
+        return jsonify({
+            'success': True,
+            'beta_id': beta_id,
+            'tester': tester
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/beta/tester/<beta_id>', methods=['DELETE'])
+def delete_beta_tester(beta_id):
+    """Delete a beta tester"""
+    try:
+        beta_id = beta_id.upper()
+        beta_manager._load_registry()
+        
+        if beta_id not in beta_manager.registry['testers']:
+            return jsonify({'error': 'Tester not found', 'beta_id': beta_id}), 404
+        
+        tester = beta_manager.registry['testers'][beta_id]
+        elder_name = tester.get('signup_data', {}).get('theirName', 'Unknown')
+        
+        del beta_manager.registry['testers'][beta_id]
+        beta_manager._save_registry()
+        
+        print(f"🗑️  Deleted beta tester: {beta_id} ({elder_name})")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Deleted {beta_id} ({elder_name})',
+            'deleted_beta_id': beta_id,
+            'deleted_elder_name': elder_name
+        })
+    except Exception as e:
+        print(f"❌ Error deleting tester: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/beta/tester/<beta_id>', methods=['PUT'])
+def update_beta_tester(beta_id):
+    """Update a beta tester's info"""
+    try:
+        beta_id = beta_id.upper()
+        beta_manager._load_registry()
+        
+        if beta_id not in beta_manager.registry['testers']:
+            return jsonify({'error': 'Tester not found', 'beta_id': beta_id}), 404
+        
+        data = request.json
+        tester = beta_manager.registry['testers'][beta_id]
+        
+        if 'status' in data:
+            tester['status'] = data['status']
+        
+        if 'agent_id' in data:
+            tester['agent_id'] = data['agent_id']
+        
+        signup_fields = ['theirName', 'yourName', 'yourEmail', 'relationship', 
+                        'theirAge', 'primaryLanguage', 'secondaryLanguage',
+                        'bestTime', 'specialNotes', 'yourPhone']
+        
+        if 'signup_data' not in tester:
+            tester['signup_data'] = {}
+        
+        for field in signup_fields:
+            if field in data:
+                tester['signup_data'][field] = data[field]
+        
+        beta_manager._save_registry()
+        
+        print(f"✏️  Updated beta tester: {beta_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Updated {beta_id}',
+            'beta_id': beta_id,
+            'tester': tester
+        })
+    except Exception as e:
+        print(f"❌ Error updating tester: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/beta/cleanup', methods=['POST'])
+def cleanup_beta_testers():
     """
-    Create ElevenLabs agent when someone completes beta signup
+    Bulk cleanup: delete specified testers and update others
     
-    Expected from Lovable:
+    Body example:
     {
-        "theirName": "Margaret Thompson",
-        "yourName": "Susan",
-        "yourEmail": "susan@example.com",
-        "relationship": "daughter",
-        "theirAge": "82",
-        "primaryLanguage": "English",
-        "specialNotes": "..."
+        "delete": ["BT004", "BT007", "BT008"],
+        "update": {
+            "BT006": {
+                "status": "active",
+                "theirName": "Helen Lewis",
+                "yourName": "Dawn Szczesiak",
+                "yourEmail": "dawnszczesiak@gmail.com"
+            }
+        }
     }
     """
+    try:
+        data = request.json
+        beta_manager._load_registry()
+        
+        results = {
+            'deleted': [],
+            'updated': [],
+            'errors': []
+        }
+        
+        for beta_id in data.get('delete', []):
+            beta_id = beta_id.upper()
+            if beta_id in beta_manager.registry['testers']:
+                name = beta_manager.registry['testers'][beta_id].get('signup_data', {}).get('theirName', 'Unknown')
+                del beta_manager.registry['testers'][beta_id]
+                results['deleted'].append(f'{beta_id} ({name})')
+                print(f"🗑️  Deleted: {beta_id} ({name})")
+            else:
+                results['errors'].append(f'{beta_id} not found')
+        
+        for beta_id, updates in data.get('update', {}).items():
+            beta_id = beta_id.upper()
+            if beta_id in beta_manager.registry['testers']:
+                tester = beta_manager.registry['testers'][beta_id]
+                
+                if 'status' in updates:
+                    tester['status'] = updates['status']
+                
+                if 'agent_id' in updates:
+                    tester['agent_id'] = updates['agent_id']
+                
+                if 'signup_data' not in tester:
+                    tester['signup_data'] = {}
+                
+                for key, value in updates.items():
+                    if key not in ['status', 'agent_id']:
+                        tester['signup_data'][key] = value
+                
+                results['updated'].append(beta_id)
+                print(f"✏️  Updated: {beta_id}")
+            else:
+                results['errors'].append(f'{beta_id} not found for update')
+        
+        beta_manager._save_registry()
+        
+        print(f"✅ Cleanup complete: {len(results['deleted'])} deleted, {len(results['updated'])} updated")
+        
+        return jsonify({
+            'success': True,
+            'results': results
+        })
+    except Exception as e:
+        print(f"❌ Error in cleanup: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================
+# END ADMIN ENDPOINTS
+# ============================================
+
+
+@app.route('/api/beta/create-agent', methods=['POST'])
+def create_agent_from_signup():
+    """Create ElevenLabs agent when someone completes beta signup"""
     try:
         user_profile = request.json
         
         print(f"\n🎯 Creating agent for beta signup: {user_profile.get('theirName')}")
         
-        # Check if automated agent creation is available
         if agent_manager is None:
             return jsonify({
                 'success': False,
-                'error': 'Automated agent creation not available. Please create agents manually in ElevenLabs UI.',
-                'message': 'For beta testing, create the agent manually and use /api/beta/link-agent to connect it.'
+                'error': 'Automated agent creation not available.',
+                'message': 'Create the agent manually and use /api/beta/link-agent to connect it.'
             }), 503
         
-        # Create ElevenLabs agent
         agent_info = agent_manager.create_agent(user_profile)
         
-        # Store agent info for later retrieval
-        # (In production, save to database)
         agent_file = Path(f"beta_agents/{user_profile['yourEmail'].replace('@', '_at_')}.json")
         agent_file.parent.mkdir(exist_ok=True)
         
@@ -568,38 +626,20 @@ def create_agent_from_signup():
 
 @app.route('/webhook/elevenlabs/conversation-ended', methods=['POST'])
 def elevenlabs_conversation_ended():
-    """
-    Webhook called by ElevenLabs when a conversation ends
-    
-    Expected payload from ElevenLabs:
-    {
-        "type": "post_call_transcription",
-        "data": {
-            "agent_id": "...",
-            "conversation_id": "...",
-            "transcript": [...],
-            "metadata": {...}
-        }
-    }
-    """
+    """Webhook called by ElevenLabs when a conversation ends"""
     try:
         payload = request.json
-        
-        # Extract nested data
         data = payload.get('data', {})
         
         print(f"\n📞 Conversation ended webhook received")
         print(f"   Agent: {data.get('agent_id')}")
         print(f"   Conversation: {data.get('conversation_id')}")
         
-        # Get conversation details
         conversation_id = data.get('conversation_id')
         agent_id = data.get('agent_id')
         
-        # Get transcript from payload (it's already included!)
         transcript_data = data.get('transcript', [])
         
-        # Convert transcript to readable format
         transcript = ""
         for turn in transcript_data:
             role = turn.get('role', 'unknown')
@@ -611,26 +651,20 @@ def elevenlabs_conversation_ended():
                 transcript += f"\nUser: {message}\n"
         
         print(f"   📝 Transcript length: {len(transcript)} characters")
-        # Load agent config OR find beta tester
-        agent_config_file = Path(f"agent_configs/{agent_id}.json")
         
-        # Try to find beta tester by agent_id
+        agent_config_file = Path(f"agent_configs/{agent_id}.json")
         tester = beta_manager.get_tester_by_agent_id(agent_id)
         
         if tester:
-            # Beta tester found!
             beta_id = tester['beta_id']
             user_name = tester['signup_data']['theirName']
             family_name = tester['signup_data']['yourName']
             family_email = tester['signup_data']['yourEmail']
             
             print(f"   👤 Beta Tester: {beta_id} - {user_name}")
-            
-            # Update conversation count
             beta_manager.update_conversation_count(beta_id)
             
         elif agent_config_file.exists():
-            # Legacy agent config (from before beta system)
             with open(agent_config_file, 'r') as f:
                 agent_config = json.load(f)
             user_profile = agent_config['user_profile']
@@ -641,32 +675,26 @@ def elevenlabs_conversation_ended():
             print(f"   👤 Legacy User: {user_name}")
             
         else:
-            # Fallback for manually created agents
             print(f"   ℹ️  No config found - using defaults")
-            user_name = "Margaret"  # Default from manual agent creation
+            user_name = "Margaret"
             family_name = "Family Member"
             family_email = "test@example.com"
             beta_id = None
         
         print(f"   👤 User: {user_name}")
         
-        # Analyze conversation
-        # Load existing knowledge base
         if beta_id:
-            # Use beta tester folder structure - save as knowledge_base.md
             kb_file = beta_manager.get_tester_data_path(beta_id, "knowledge_base.md")
         else:
-            # Legacy path
             kb_file = Path(f"knowledge_bases/{agent_id}.txt")
         
-        kb_file.parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+        kb_file.parent.mkdir(parents=True, exist_ok=True)
         
         existing_kb = ""
         if kb_file.exists():
             with open(kb_file, 'r', encoding='utf-8') as f:
                 existing_kb = f.read()
         else:
-            # Create initial knowledge base for manually created agent
             existing_kb = f"""# Conversation Memory for {user_name}
 
 ## Quick Reference
@@ -675,31 +703,14 @@ Total conversations: 0
 
 ## Person Profile
 - Name: {user_name}
-
-## Conversation Summaries
-(Will be updated after each conversation)
-
-## Full Conversation Transcripts
-(Will be stored after each conversation)
-
-## Topics for Future Reminiscence
-(Will be identified from conversations)
-
-## Health Timeline
-(Will be tracked from natural conversation)
-
-## Biography Building Blocks
-(Will emerge from their stories)
 """
         
-        # Analyze with Claude
         analysis = conversation_analyzer.analyze_conversation(
             transcript=transcript,
             user_name=user_name,
             existing_knowledge_base=existing_kb
         )
         
-        # Update knowledge base
         updated_kb = conversation_analyzer.update_knowledge_base(
             existing_kb=existing_kb,
             transcript=transcript,
@@ -707,7 +718,6 @@ Total conversations: 0
             user_name=user_name
         )
         
-        # Save updated knowledge base
         kb_file.parent.mkdir(exist_ok=True)
         with open(kb_file, 'w', encoding='utf-8') as f:
             f.write(updated_kb)
@@ -715,18 +725,14 @@ Total conversations: 0
         print(f"   📝 Updating knowledge base for {user_name}...")
         print(f"   ✅ Knowledge base updated ({len(updated_kb)} chars)")
         
-        # AUTOMATIC COMPRESSION (Cost Optimization)
-        # Check if knowledge base is getting too large and compress if needed
         compressed_kb, should_save = memory_manager.manage_knowledge_base(updated_kb, user_name)
         if should_save:
             with open(kb_file, 'w', encoding='utf-8') as f:
                 f.write(compressed_kb)
             print(f"   🗜️  Knowledge base compressed and saved")
-            updated_kb = compressed_kb  # Use compressed version going forward
+            updated_kb = compressed_kb
         
-        # SAVE CONVERSATION DATA FOR DASHBOARD
         if beta_id:
-            # Save complete conversation data as JSON for dashboard
             conversation_data = {
                 'conversation_id': conversation_id,
                 'agent_id': agent_id,
@@ -737,7 +743,6 @@ Total conversations: 0
                 'beta_id': beta_id
             }
             
-            # Save to conversations folder
             conv_folder = beta_manager.get_tester_data_path(beta_id, "conversations")
             conv_folder.mkdir(parents=True, exist_ok=True)
             
@@ -747,7 +752,6 @@ Total conversations: 0
             
             print(f"   💾 Conversation saved: {conv_file.name}")
             
-            # Also save transcript as text file
             transcript_folder = beta_manager.get_tester_data_path(beta_id, "transcripts")
             transcript_folder.mkdir(parents=True, exist_ok=True)
             
@@ -757,17 +761,14 @@ Total conversations: 0
             
             print(f"   📄 Transcript saved: {transcript_file.name}")
         
-        # Upload updated knowledge base to ElevenLabs (if possible)
         if agent_manager is not None:
             try:
                 agent_manager.update_agent_after_conversation(agent_id, updated_kb)
             except Exception as e:
                 print(f"   ⚠️  Could not upload to ElevenLabs: {e}")
-                print(f"   💡 Knowledge base saved locally, will need manual upload")
         else:
             print(f"   ℹ️  ElevenLabs API not configured - knowledge base saved locally only")
         
-        # Generate family update
         print(f"   📊 Generating family update...")
         family_update = conversation_analyzer.generate_family_update(
             analysis=analysis,
@@ -777,27 +778,19 @@ Total conversations: 0
         
         print(f"   ✅ Family update generated - Alert level: {family_update.get('alert_level', 'N/A')}")
         
-        # Save family update
         if beta_id:
-            # Use beta tester folder structure
             update_file = beta_manager.get_tester_data_path(beta_id, "family_updates") / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         else:
-            # Legacy path
             update_file = Path(f"family_updates/{agent_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
         
         update_file.parent.mkdir(parents=True, exist_ok=True)
         with open(update_file, 'w', encoding='utf-8') as f:
             json.dump(family_update, f, indent=2)
         
-        # TODO: Send email to family if configured
-        # send_family_email(user_profile['yourEmail'], family_update)
-        
-        # Check for red flags
         if analysis['health'].get('red_flags'):
             print(f"🔴 RED FLAGS DETECTED:")
             for flag in analysis['health']['red_flags']:
                 print(f"   - {flag}")
-            # TODO: Send immediate alert to family
         
         print(f"✅ Conversation processed successfully")
         
@@ -827,18 +820,11 @@ def home():
 
 @app.route('/webhook/elevenlabs', methods=['POST'])
 def elevenlabs_webhook():
-    """
-    Main webhook endpoint for ElevenLabs
-    Receives conversation turns and returns Aila's response
-    """
+    """Main webhook endpoint for ElevenLabs"""
     try:
         data = request.json
         print(f"\n📨 Received webhook from ElevenLabs")
         print(f"Data: {json.dumps(data, indent=2)}")
-        
-        # Extract data from webhook
-        # Note: Actual ElevenLabs webhook format may vary
-        # This is a template - we'll adjust based on their docs
         
         agent_id = data.get('agent_id')
         user_transcript = data.get('transcript') or data.get('user_message')
@@ -847,12 +833,9 @@ def elevenlabs_webhook():
         if not user_transcript:
             return jsonify({'error': 'No transcript provided'}), 400
         
-        # Find or create session for this agent
         session_key = agent_id or conversation_id
         
         if session_key not in sessions:
-            # New conversation - need user info
-            # This should come from the signup data
             user_name = data.get('user_name', 'User')
             
             print(f"🆕 Creating new session for: {user_name}")
@@ -866,42 +849,32 @@ def elevenlabs_webhook():
                 'agent_id': agent_id
             }
             
-            # Start the session (get greeting)
             aila_response = biographer.start_session()
             sessions[session_key]['conversation_count'] = 1
             
         else:
-            # Existing conversation
             session = sessions[session_key]
             biographer = session['biographer']
             
             print(f"💬 Continuing conversation for: {session['user_name']}")
             print(f"   User said: {user_transcript}")
             
-            # Get Aila's response using biographer logic
             aila_response, is_complete = biographer.respond_to_user(user_transcript)
             
             session['conversation_count'] += 1
             session['last_interaction'] = datetime.now().isoformat()
             
-            # If session is complete, generate chapter
             if is_complete:
                 print(f"✅ Session complete! Generating chapter...")
                 try:
                     session_id = biographer.data["sessions"][-1]["session_id"]
                     chapter_path = biographer.generate_chapter(session_id)
                     print(f"📄 Chapter generated: {chapter_path}")
-                    
-                    # TODO: Email chapter to family
-                    # send_chapter_to_family(session['user_name'], chapter_path)
-                    
                 except Exception as e:
                     print(f"⚠️  Chapter generation failed: {e}")
         
-        # Save sessions
         save_sessions()
         
-        # Return response to ElevenLabs
         return jsonify({
             'response': aila_response,
             'continue_conversation': True,
@@ -917,9 +890,7 @@ def elevenlabs_webhook():
 
 @app.route('/webhook/conversation-ended', methods=['POST'])
 def conversation_ended():
-    """
-    Called when ElevenLabs conversation ends
-    """
+    """Called when ElevenLabs conversation ends"""
     data = request.json
     agent_id = data.get('agent_id')
     conversation_id = data.get('conversation_id')
@@ -928,17 +899,12 @@ def conversation_ended():
     
     print(f"📞 Conversation ended for session: {session_key}")
     
-    # Session data persists for next conversation
-    # We don't delete it - Aila should remember!
-    
     return jsonify({'status': 'acknowledged'})
 
 
 @app.route('/api/sessions', methods=['GET'])
 def list_sessions():
-    """
-    Admin endpoint to view active sessions
-    """
+    """Admin endpoint to view active sessions"""
     session_list = []
     for session_key, session in sessions.items():
         session_list.append({
@@ -957,9 +923,7 @@ def list_sessions():
 
 @app.route('/api/session/<session_id>', methods=['GET'])
 def get_session(session_id):
-    """
-    Get details about a specific session
-    """
+    """Get details about a specific session"""
     if session_id not in sessions:
         return jsonify({'error': 'Session not found'}), 404
     
@@ -978,14 +942,11 @@ def get_session(session_id):
 
 @app.route('/api/test', methods=['POST'])
 def test_endpoint():
-    """
-    Test endpoint to simulate ElevenLabs webhook
-    """
+    """Test endpoint to simulate ElevenLabs webhook"""
     data = request.json
     user_name = data.get('user_name', 'Test User')
     message = data.get('message', 'Hello')
     
-    # Create test session
     test_key = 'test-session'
     
     if test_key not in sessions:
@@ -1012,313 +973,14 @@ def test_endpoint():
     })
 
 
-@app.route('/api/voice/process', methods=['POST'])
-def process_voice():
-    """
-    Process voice conversation from the web interface
-    Receives audio, transcribes it, gets biographer response, converts to speech
-    """
-    try:
-        data = request.json
-        
-        # Get audio and profile
-        audio_base64 = data.get('audio')
-        profile = data.get('profile')
-        
-        if not audio_base64 or not profile:
-            return jsonify({'error': 'Missing audio or profile'}), 400
-        
-        print(f"\n🎤 Processing voice for: {profile.get('theirName')}")
-        
-        # Import ElevenLabs for speech processing
-        from elevenlabs import ElevenLabs
-        
-        eleven_client = ElevenLabs(api_key=os.environ.get("ELEVENLABS_API_KEY"))
-        
-        # Step 1: Speech-to-Text (transcribe user's audio)
-        print("📝 Transcribing audio...")
-        import base64
-        
-        # Decode base64 audio
-        try:
-            # Remove data URL prefix if present (data:audio/webm;base64,)
-            if ',' in audio_base64:
-                audio_base64 = audio_base64.split(',')[1]
-            
-            audio_bytes = base64.b64decode(audio_base64)
-            print(f"   Decoded audio: {len(audio_bytes)} bytes")
-            
-        except Exception as e:
-            print(f"   Base64 decode error: {e}")
-            return jsonify({'error': 'Invalid audio data'}), 400
-        
-        # Save as temporary file
-        temp_audio = Path("temp_audio.webm")
-        with open(temp_audio, 'wb') as f:
-            f.write(audio_bytes)
-        
-        # Try to transcribe with ElevenLabs
-        try:
-            print("   Attempting transcription with ElevenLabs...")
-            
-            # The correct way to call ElevenLabs speech-to-text
-            # Open file and pass it directly
-            with open(temp_audio, 'rb') as audio_file:
-                # Method signature: convert(file, model_id)
-                transcript_result = eleven_client.speech_to_text.convert(
-                    file=audio_file,
-                    model_id="scribe_v2"
-                )
-            
-            user_text = transcript_result.get('text', '')
-            print(f"👤 User said: {user_text}")
-            
-            # Clean up temp file
-            temp_audio.unlink()
-            
-        except Exception as transcribe_error:
-            print(f"   ⚠️ Transcription failed: {transcribe_error}")
-            print("   Error type:", type(transcribe_error).__name__)
-            
-            # Clean up temp file
-            if temp_audio.exists():
-                temp_audio.unlink()
-            
-            # TEMPORARY: Type what you said manually for testing
-            # This allows us to test the rest of the system while we fix audio format
-            user_text = "Yes, I have time to talk. I'm feeling okay today."
-            print(f"   📝 Using test response for now: {user_text}")
-            print("   💡 Note: Real transcription will be enabled once audio format is fixed")
-        
-        # Step 2: Get biographer response
-        session_key = profile.get('yourEmail')  # Use email as session key
-        
-        if session_key not in sessions:
-            # Create new session
-            print(f"🆕 Creating new session")
-            companion = CompanionAI(user_name=profile.get('theirName'))
-            
-            sessions[session_key] = {
-                'user_name': profile.get('theirName'),
-                'companion': companion,
-                'conversation_count': 0,
-                'last_interaction': datetime.now().isoformat(),
-                'profile': profile
-            }
-            
-            # Get initial greeting
-            aila_response = companion.start_session()
-            sessions[session_key]['conversation_count'] = 1
-        else:
-            # Continue existing session
-            session = sessions[session_key]
-            companion = session['companion']
-            
-            print(f"💬 Continuing session for: {session['user_name']}")
-            
-            # Get response from companion
-            aila_response, is_complete = companion.respond_to_user(user_text)
-            
-            session['conversation_count'] += 1
-            session['last_interaction'] = datetime.now().isoformat()
-            
-            # If session complete, generate family update
-            if is_complete:
-                print(f"✅ Session complete! Generating family update...")
-                try:
-                    family_update = companion.generate_family_update()
-                    print(f"📊 Family update generated")
-                    
-                    # Store update
-                    session['last_family_update'] = family_update
-                    
-                    # TODO: Email family with update
-                except Exception as e:
-                    print(f"⚠️ Family update generation failed: {e}")
-        
-        print(f"🤖 Aila responds: {aila_response}")
-        
-        # Step 3: Text-to-Speech (convert Aila's response to audio)
-        print("🔊 Converting to speech...")
-        
-        audio_response = eleven_client.text_to_speech.convert(
-            voice_id="EXAVITQu4vr4xnSDxMaL",  # Jessica voice
-            text=aila_response,
-            model_id="eleven_multilingual_v2"
-        )
-        
-        # Convert audio bytes to base64
-        audio_bytes_list = list(audio_response)
-        audio_data = b''.join(audio_bytes_list)
-        audio_base64_response = base64.b64encode(audio_data).decode('utf-8')
-        
-        # Save sessions
-        save_sessions()
-        
-        return jsonify({
-            'success': True,
-            'user_text': user_text,
-            'aila_text': aila_response,
-            'audio': audio_base64_response,
-            'conversation_count': sessions[session_key]['conversation_count']
-        })
-    
-    except Exception as e:
-        print(f"❌ Error in voice processing: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/session/start', methods=['POST'])
-def start_session():
-    """
-    Start a new conversation session - Aila speaks first
-    """
-    try:
-        data = request.json
-        profile = data.get('profile')
-        
-        if not profile:
-            return jsonify({'error': 'No profile provided'}), 400
-        
-        print(f"\n🎬 Starting new session for: {profile.get('theirName')}")
-        
-        # Import ElevenLabs
-        from elevenlabs import ElevenLabs
-        eleven_client = ElevenLabs(api_key=os.environ.get("ELEVENLABS_API_KEY"))
-        
-        session_key = profile.get('yourEmail')
-        
-        # Create new session or get existing
-        if session_key not in sessions:
-            print(f"🆕 Creating NEW session - first time user")
-            companion = CompanionAI(user_name=profile.get('theirName'))
-            
-            sessions[session_key] = {
-                'user_name': profile.get('theirName'),
-                'companion': companion,
-                'conversation_count': 0,
-                'last_interaction': datetime.now().isoformat(),
-                'profile': profile,
-                'is_new': True
-            }
-            
-            # Get initial greeting for NEW user
-            aila_response = companion.start_session()
-            sessions[session_key]['conversation_count'] = 1
-            print(f"   This is their FIRST conversation")
-        else:
-            # Existing session - returning user
-            session = sessions[session_key]
-            print(f"🔄 Returning user - has {session['conversation_count']} previous interactions")
-            
-            # Check if this is same day or new day
-            last_time = datetime.fromisoformat(session['last_interaction'])
-            if (datetime.now() - last_time).days > 0:
-                # New day - warm welcome back
-                aila_response = f"Hi {profile.get('theirName')}! It's Aila. It's so good to hear from you again. How have you been since we last talked?"
-            else:
-                # Same day - continuing conversation
-                aila_response = f"Hi {profile.get('theirName')}! It's Aila. How are you feeling right now?"
-            
-            session['is_new'] = False
-        
-        print(f"🤖 Aila greets: {aila_response}")
-        
-        # Convert to speech
-        print("🔊 Converting greeting to speech...")
-        audio_response = eleven_client.text_to_speech.convert(
-            voice_id="EXAVITQu4vr4xnSDxMaL",  # Jessica voice
-            text=aila_response,
-            model_id="eleven_multilingual_v2"
-        )
-        
-        # Convert audio to base64
-        import base64
-        audio_bytes_list = list(audio_response)
-        audio_data = b''.join(audio_bytes_list)
-        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-        
-        save_sessions()
-        
-        return jsonify({
-            'success': True,
-            'aila_text': aila_response,
-            'audio': audio_base64,
-            'session_key': session_key
-        })
-    
-    except Exception as e:
-        print(f"❌ Error starting session: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/session/info', methods=['POST'])
-def get_session_info():
-    """
-    Get information about current session
-    """
-    try:
-        data = request.json
-        profile = data.get('profile')
-        
-        if not profile:
-            return jsonify({'error': 'No profile provided'}), 400
-        
-        session_key = profile.get('yourEmail')
-        
-        if session_key not in sessions:
-            return jsonify({
-                'exists': False,
-                'message': 'No active session'
-            })
-        
-        session = sessions[session_key]
-        companion = session['companion']
-        
-        return jsonify({
-            'exists': True,
-            'conversation_count': session['conversation_count'],
-            'user_name': session['user_name'],
-            'last_interaction': session['last_interaction'],
-            'total_conversations': len(companion.data['conversations']),
-            'recent_mood': companion._calculate_average_mood(),
-            'health_concerns': len(companion._get_health_concerns()),
-            'last_family_update': session.get('last_family_update')
-        })
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/family-dashboard/<beta_id>', methods=['GET'])
 def get_family_dashboard(beta_id):
-    """
-    Get comprehensive family dashboard for a beta tester
-    
-    Returns:
-        JSON with:
-        - Weekly summary (conversation count, mood, engagement)
-        - Health insights (patterns, concerns, trends)
-        - Recent conversations (last 3 with highlights)
-        - Memorable quotes
-        - Biography progress
-        - Alerts for family
-        - Trend data for charts
-        - Recommendations
-    
-    Example:
-        GET /api/family-dashboard/BT001
-    """
+    """Get comprehensive family dashboard for a beta tester"""
     try:
         beta_id = beta_id.upper()
         
         print(f"\n📊 Generating family dashboard for {beta_id}...")
         
-        # Generate the dashboard
         dashboard = dashboard_generator.generate_dashboard(beta_id)
         
         if not dashboard.get('success'):
@@ -1341,23 +1003,7 @@ def get_family_dashboard(beta_id):
 
 @app.route('/api/biography/<beta_id>', methods=['GET'])
 def get_full_biography(beta_id):
-    """
-    Get FULL biography built from complete conversation archive
-    
-    This uses the full conversation JSON files (never compressed)
-    to preserve all the "color" and detail for biography generation
-    
-    Returns:
-        JSON with:
-        - All stories (with full details and sensory information)
-        - Character map (all people mentioned)
-        - Timeline of life events
-        - Themes and patterns
-        - Quotes in full context
-    
-    Example:
-        GET /api/biography/BT001
-    """
+    """Get FULL biography built from complete conversation archive"""
     try:
         beta_id = beta_id.upper()
         
@@ -1386,15 +1032,7 @@ def get_full_biography(beta_id):
 
 @app.route('/api/biography/<beta_id>/export', methods=['GET'])
 def export_biography_document(beta_id):
-    """
-    Export full biography as a formatted document
-    
-    Query params:
-        format: 'markdown' (default) or 'json'
-    
-    Example:
-        GET /api/biography/BT001/export?format=markdown
-    """
+    """Export full biography as a formatted document"""
     try:
         beta_id = beta_id.upper()
         format_type = request.args.get('format', 'markdown')
@@ -1419,21 +1057,7 @@ def export_biography_document(beta_id):
 
 @app.route('/api/admin/reset-all-beta-data', methods=['POST'])
 def reset_all_beta_data():
-    """
-    ADMIN ONLY: Reset all beta tester data
-    
-    THIS WILL DELETE:
-    - All beta tester registrations
-    - All conversation histories
-    - All knowledge bases
-    - All family updates
-    
-    Requires confirmation parameter to prevent accidents
-    
-    Usage:
-    POST /api/admin/reset-all-beta-data
-    Body: {"confirm": "RESET_ALL_DATA"}
-    """
+    """ADMIN ONLY: Reset all beta tester data"""
     try:
         data = request.json
         
@@ -1446,7 +1070,6 @@ def reset_all_beta_data():
         
         print("\n⚠️  RESETTING ALL BETA DATA...")
         
-        # Get beta_testers directory
         beta_dir = Path("beta_testers")
         
         if not beta_dir.exists():
@@ -1455,7 +1078,6 @@ def reset_all_beta_data():
                 'message': 'No beta data exists yet'
             })
         
-        # Count what we're deleting
         registry_file = beta_dir / "registry.json"
         tester_count = 0
         conversation_count = 0
@@ -1465,14 +1087,12 @@ def reset_all_beta_data():
                 registry = json.load(f)
                 tester_count = len(registry.get('testers', {}))
         
-        # Count conversations
         for tester_dir in beta_dir.iterdir():
             if tester_dir.is_dir() and tester_dir.name.startswith('BT'):
                 conv_dir = tester_dir / 'conversations'
                 if conv_dir.exists():
                     conversation_count += len(list(conv_dir.glob('*.json')))
         
-        # Delete all contents but keep the directory (for Railway volumes)
         import shutil
         for item in beta_dir.iterdir():
             if item.is_file():
@@ -1480,7 +1100,6 @@ def reset_all_beta_data():
             elif item.is_dir():
                 shutil.rmtree(item)
         
-        # Create fresh registry
         new_registry = {
             "next_id": 1,
             "testers": {}
@@ -1489,7 +1108,6 @@ def reset_all_beta_data():
         with open(registry_file, 'w') as f:
             json.dump(new_registry, f, indent=2)
         
-        # Reinitialize the beta manager
         global beta_manager
         beta_manager = BetaTesterManager()
         
@@ -1521,21 +1139,16 @@ if __name__ == '__main__':
     print("=" * 70)
     print("\n✅ Server starting...")
     print(f"\n📋 BETA TESTER ENDPOINTS:")
-    print(f"   Register: http://localhost:5000/api/beta/register")
-    print(f"   Link agent: http://localhost:5000/api/beta/link-agent")
-    print(f"   View all: http://localhost:5000/api/beta/testers")
+    print(f"   Register: POST /api/beta/register")
+    print(f"   Link agent: POST /api/beta/link-agent")
+    print(f"   View all: GET /api/beta/testers")
+    print(f"   Get one: GET /api/beta/tester/<beta_id>")
+    print(f"   Update: PUT /api/beta/tester/<beta_id>")
+    print(f"   Delete: DELETE /api/beta/tester/<beta_id>")
+    print(f"   Cleanup: POST /api/beta/cleanup")
     print(f"\n👨‍👩‍👧 FAMILY DASHBOARD:")
-    print(f"   Dashboard: http://localhost:5000/api/family-dashboard/<beta_id>")
-    print(f"   Example: http://localhost:5000/api/family-dashboard/BT002")
-    print(f"\n🤖 AGENT ENDPOINTS:")
-    print(f"   Knowledge base: http://localhost:5000/api/knowledge-base/<agent_id>")
-    print(f"   Webhook: http://localhost:5000/webhook/elevenlabs/conversation-ended")
-    print(f"\n🌐 NGROK:")
-    print(f"   URL: {os.environ.get('WEBHOOK_BASE_URL', 'Not set')}")
-    print(f"   💡 Make sure ngrok is running: ngrok http 5000")
+    print(f"   Dashboard: GET /api/family-dashboard/<beta_id>")
     print("\n🤝 Ready for beta testing!\n")
     
-    # Run server
-    # Railway provides PORT environment variable in production
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
