@@ -1,7 +1,7 @@
 """
 Family Dashboard Generator
 Creates comprehensive family reports from conversation data
-Phase 1: Health Event Tracking + Enhanced Quotes
+Phase 1: Health Event Tracking + Enhanced Theme-Based "In Their Words"
 """
 
 import json
@@ -46,6 +46,103 @@ class FamilyDashboardGenerator:
             'back', 'knee', 'hip', 'shoulder', 'neck', 'arm', 'leg',
             'ankle', 'wrist', 'hand', 'foot', 'head', 'chest', 'stomach'
         ]
+        
+        # Theme definitions for "In Their Words"
+        self.theme_definitions = {
+            'snowbird_lifestyle': {
+                'name': 'Snowbird Lifestyle',
+                'keywords': ['snowbird', 'arizona', 'winter', 'rv', 'park', 'trailer', 
+                            'south', 'warm', 'sun', 'migrate', 'seasonal'],
+                'priority': 1
+            },
+            'health_recovery': {
+                'name': 'Health & Recovery',
+                'keywords': ['pain', 'injury', 'back', 'sleep', 'doctor', 'recovery',
+                            'hurt', 'fell', 'hospital', 'healing', 'better', 'worse'],
+                'priority': 2
+            },
+            'family': {
+                'name': 'Family',
+                'keywords': ['daughter', 'son', 'wife', 'husband', 'grandkid', 'grandson',
+                            'granddaughter', 'child', 'family', 'kids', 'mother', 'father',
+                            'sister', 'brother', 'grandchild'],
+                'priority': 3
+            },
+            'social_life': {
+                'name': 'Social Life & Friends',
+                'keywords': ['friend', 'poker', 'dinner', 'lunch', 'community', 'neighbor',
+                            'people', 'social', 'party', 'gathering', 'club', 'group'],
+                'priority': 4
+            },
+            'hobbies': {
+                'name': 'Hobbies & Interests',
+                'keywords': ['poker', 'golf', 'fishing', 'woodworking', 'reading', 'garden',
+                            'hobby', 'enjoy', 'love doing', 'passion', 'craft'],
+                'priority': 5
+            },
+            'travel': {
+                'name': 'Travel & Adventures',
+                'keywords': ['travel', 'trip', 'vacation', 'visit', 'flew', 'drive',
+                            'adventure', 'explore', 'country', 'cruise'],
+                'priority': 6
+            },
+            'home_living': {
+                'name': 'Home & Daily Life',
+                'keywords': ['home', 'house', 'trailer', 'storage', 'errands', 'routine',
+                            'morning', 'day', 'living', 'chores'],
+                'priority': 7
+            },
+            'memories': {
+                'name': 'Memories & Life Story',
+                'keywords': ['remember', 'years ago', 'used to', 'when i was', 'childhood',
+                            'grew up', 'younger', 'back then', 'history', 'past'],
+                'priority': 8
+            },
+            'work_career': {
+                'name': 'Work & Career',
+                'keywords': ['work', 'job', 'career', 'retired', 'business', 'company',
+                            'profession', 'boss', 'employee', 'office'],
+                'priority': 9
+            }
+        }
+        
+        # Meta-quote patterns to filter OUT (regex)
+        self.meta_patterns = [
+            # AI/Robot references
+            r"don'?t you (ever )?sleep",
+            r"do you sleep",
+            r"you'?re (an? )?(ai|robot|machine|computer)",
+            r"as (an? )?(ai|artificial)",
+            r"see me (as|purely as) fiction",
+            r"speaking with me",
+            r"talking to (me|you)",
+            r"you (don'?t |can'?t )?(have|feel|experience|understand)",
+            r"what do you think",
+            r"how do you feel",
+            r"are you real",
+            r"you'?re not (real|human)",
+            r"artificial intelligence",
+            r"you'?re programmed",
+            r"your programming",
+            
+            # Meta-conversation
+            r"this conversation",
+            r"we'?re (just )?talking",
+            r"you asked",
+            r"i asked you",
+            r"let me ask",
+            r"that'?s a good question",
+            
+            # Too vague/short
+            r"^(yes|no|okay|ok|sure|right|yeah|yep|nope|maybe|hmm|huh|well)[\.\?!,]?$",
+            r"^i (think|guess|suppose) so[\.\?!]?$",
+            r"^that'?s (right|true|correct)[\.\?!]?$",
+            r"^i don'?t know[\.\?!]?$",
+            r"^not really[\.\?!]?$",
+        ]
+        
+        # Compile patterns for efficiency
+        self.compiled_meta_patterns = [re.compile(p, re.IGNORECASE) for p in self.meta_patterns]
     
     def _to_local_time(self, timestamp_str):
         """Convert UTC timestamp to Vancouver local time"""
@@ -83,6 +180,62 @@ class FamilyDashboardGenerator:
         else:
             return f"{minutes} minutes"
     
+    def _is_meta_quote(self, quote):
+        """Check if quote is meta/AI-related and should be filtered"""
+        if not quote:
+            return True
+        
+        quote_lower = quote.lower().strip()
+        
+        # Check against compiled patterns
+        for pattern in self.compiled_meta_patterns:
+            if pattern.search(quote_lower):
+                return True
+        
+        # Additional keyword checks
+        meta_keywords = ['aila', 'ai ', ' ai', 'robot', 'artificial', 'programmed', 
+                        'machine', 'computer', 'algorithm']
+        if any(kw in quote_lower for kw in meta_keywords):
+            return True
+        
+        return False
+    
+    def _detect_theme(self, text, topics=None, stories=None):
+        """Detect the most relevant theme for a piece of text"""
+        if not text:
+            return 'general', 'Life Story'
+        
+        text_lower = text.lower()
+        
+        # Also check topics and stories
+        all_text = text_lower
+        if topics:
+            all_text += ' ' + ' '.join(t.lower() for t in topics if t)
+        if stories:
+            for story in stories:
+                if isinstance(story, dict):
+                    all_text += ' ' + story.get('topic', '').lower()
+                    all_text += ' ' + story.get('details', '').lower()
+                elif isinstance(story, str):
+                    all_text += ' ' + story.lower()
+        
+        # Score each theme
+        theme_scores = {}
+        for theme_id, theme_def in self.theme_definitions.items():
+            score = 0
+            for keyword in theme_def['keywords']:
+                if keyword in all_text:
+                    score += 1
+            if score > 0:
+                theme_scores[theme_id] = score
+        
+        if not theme_scores:
+            return 'general', 'Life Story'
+        
+        # Return highest scoring theme
+        best_theme = max(theme_scores, key=theme_scores.get)
+        return best_theme, self.theme_definitions[best_theme]['name']
+    
     def generate_dashboard(self, beta_id):
         """Generate complete family dashboard for a beta tester"""
         self.beta_manager._load_registry()
@@ -101,6 +254,9 @@ class FamilyDashboardGenerator:
             with open(kb_path, 'r', encoding='utf-8') as f:
                 knowledge_base = f.read()
         
+        # Get elder name for context building
+        elder_name = tester['signup_data'].get('theirName', 'They')
+        
         # Detect health events FIRST (needed by other sections)
         health_events = self._detect_health_events(conversations, knowledge_base)
         
@@ -108,7 +264,7 @@ class FamilyDashboardGenerator:
             'success': True,
             'beta_id': beta_id,
             'elder': {
-                'name': tester['signup_data'].get('theirName', 'Unknown'),
+                'name': elder_name,
                 'age': tester['signup_data'].get('theirAge', 'Unknown'),
             },
             'family': {
@@ -119,8 +275,9 @@ class FamilyDashboardGenerator:
             'generated_at': datetime.now().isoformat(),
             'summary': self._generate_summary(conversations, tester, health_events),
             'health_events': health_events,
+            'in_their_words': self._build_in_their_words(conversations, elder_name),  # NEW
             'biography_progress': self._analyze_biography_progress(knowledge_base, conversations),
-            'life_story_quotes': self._extract_biographical_quotes(conversations),
+            'life_story_quotes': self._extract_biographical_quotes(conversations),  # KEEP for backward compat
             'recent_conversations': self._generate_recent_conversations(conversations),
             'health_insights': self._generate_health_insights(conversations, health_events),
             'alerts': self._identify_alerts(conversations, health_events),
@@ -145,6 +302,273 @@ class FamilyDashboardGenerator:
         
         return conversations
     
+    def _build_in_their_words(self, conversations, elder_name):
+        """
+        Build theme-based "In Their Words" section with context narratives
+        
+        Returns:
+        {
+            "themes": [
+                {
+                    "theme_id": "snowbird_lifestyle",
+                    "theme_name": "Snowbird Lifestyle",
+                    "context": "Gerry and his wife have been snowbirds for 13 years...",
+                    "quotes": [...],
+                    "first_mentioned": "Jan 08, 2026",
+                    "last_updated": "Jan 09, 2026"
+                }
+            ],
+            "meta_filtered_count": 3
+        }
+        """
+        theme_data = defaultdict(lambda: {
+            'quotes': [],
+            'context_pieces': [],
+            'first_mentioned': None,
+            'last_mentioned': None,
+            'stories': []
+        })
+        
+        meta_filtered_count = 0
+        
+        for conv in conversations:
+            analysis = conv.get('analysis', {})
+            conv_quotes = analysis.get('conversation', {}).get('memorable_quotes', [])
+            topics = analysis.get('conversation', {}).get('topics', [])
+            mood = analysis.get('conversation', {}).get('mood', 'neutral')
+            bio = analysis.get('biography', {})
+            stories = bio.get('stories', [])
+            
+            timestamp = conv.get('timestamp', '')
+            date_fmt = self._format_date(timestamp)
+            
+            # Get mood info
+            mood_lower = str(mood).lower()
+            if any(w in mood_lower for w in ['positive', 'happy', 'good', 'cheerful']):
+                mood_emoji, mood_label = '😊', 'Happy'
+            elif any(w in mood_lower for w in ['negative', 'sad', 'upset', 'worried']):
+                mood_emoji, mood_label = '😔', 'Reflective'
+            else:
+                mood_emoji, mood_label = '😌', 'Relaxed'
+            
+            # Process stories for context building
+            for story in stories:
+                if isinstance(story, dict):
+                    story_topic = story.get('topic', '')
+                    story_details = story.get('details', '')
+                elif isinstance(story, str):
+                    story_topic = ''
+                    story_details = story
+                else:
+                    continue
+                
+                if story_details and len(story_details.strip()) > 10:
+                    theme_id, _ = self._detect_theme(story_details, topics, stories)
+                    theme_data[theme_id]['stories'].append({
+                        'topic': story_topic,
+                        'details': story_details,
+                        'timestamp': timestamp
+                    })
+                    theme_data[theme_id]['context_pieces'].append(story_details)
+                    
+                    # Update timestamps
+                    if not theme_data[theme_id]['first_mentioned'] or timestamp < theme_data[theme_id]['first_mentioned']:
+                        theme_data[theme_id]['first_mentioned'] = timestamp
+                    if not theme_data[theme_id]['last_mentioned'] or timestamp > theme_data[theme_id]['last_mentioned']:
+                        theme_data[theme_id]['last_mentioned'] = timestamp
+            
+            # Process quotes
+            for quote in conv_quotes:
+                if not quote or not isinstance(quote, str):
+                    continue
+                
+                quote_stripped = quote.strip()
+                
+                # Filter meta quotes
+                if self._is_meta_quote(quote_stripped):
+                    meta_filtered_count += 1
+                    continue
+                
+                # Skip too short
+                if len(quote_stripped.split()) < 5:
+                    continue
+                
+                # Detect theme for this quote
+                theme_id, _ = self._detect_theme(quote_stripped, topics, stories)
+                
+                theme_data[theme_id]['quotes'].append({
+                    'quote': quote_stripped,
+                    'date': date_fmt,
+                    'timestamp': timestamp,
+                    'mood': mood_label,
+                    'mood_emoji': mood_emoji
+                })
+                
+                # Update timestamps
+                if not theme_data[theme_id]['first_mentioned'] or timestamp < theme_data[theme_id]['first_mentioned']:
+                    theme_data[theme_id]['first_mentioned'] = timestamp
+                if not theme_data[theme_id]['last_mentioned'] or timestamp > theme_data[theme_id]['last_mentioned']:
+                    theme_data[theme_id]['last_mentioned'] = timestamp
+        
+        # Build final themes with context narratives
+        themes = []
+        for theme_id, data in theme_data.items():
+            if not data['quotes']:
+                continue
+            
+            # Get theme name
+            if theme_id in self.theme_definitions:
+                theme_name = self.theme_definitions[theme_id]['name']
+                priority = self.theme_definitions[theme_id]['priority']
+            else:
+                theme_name = 'Life Story'
+                priority = 99
+            
+            # Build context narrative from stories
+            context = self._build_theme_context(theme_id, data, elder_name)
+            
+            # Deduplicate quotes
+            seen_quotes = set()
+            unique_quotes = []
+            for q in data['quotes']:
+                q_lower = q['quote'].lower().strip()
+                if q_lower not in seen_quotes:
+                    seen_quotes.add(q_lower)
+                    unique_quotes.append(q)
+            
+            # Sort quotes by date (newest first)
+            unique_quotes.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            
+            themes.append({
+                'theme_id': theme_id,
+                'theme_name': theme_name,
+                'priority': priority,
+                'context': context,
+                'quotes': unique_quotes[:5],  # Top 5 quotes per theme
+                'total_quotes': len(unique_quotes),
+                'first_mentioned': self._format_date(data['first_mentioned']),
+                'last_updated': self._format_date(data['last_mentioned'])
+            })
+        
+        # Sort themes by priority
+        themes.sort(key=lambda x: x.get('priority', 99))
+        
+        return {
+            'themes': themes,
+            'meta_filtered_count': meta_filtered_count,
+            'total_themes': len(themes)
+        }
+    
+    def _build_theme_context(self, theme_id, data, elder_name):
+        """Build a narrative context for a theme from accumulated stories"""
+        context_pieces = data.get('context_pieces', [])
+        stories = data.get('stories', [])
+        
+        if not context_pieces and not stories:
+            return f"Stories and memories shared about {self.theme_definitions.get(theme_id, {}).get('name', 'this topic')}."
+        
+        # Extract key facts from context pieces
+        facts = []
+        
+        # Theme-specific context building
+        if theme_id == 'snowbird_lifestyle':
+            # Look for duration, location, community size
+            for piece in context_pieces:
+                piece_lower = piece.lower()
+                
+                # Duration
+                years_match = re.search(r'(\d+)\s*years?\s*(as\s+)?snowbird', piece_lower)
+                if years_match:
+                    facts.append(f"has been a snowbird for {years_match.group(1)} years")
+                
+                # Location
+                if 'arizona' in piece_lower:
+                    facts.append("winters in Arizona")
+                if 'canada' in piece_lower or 'canadian' in piece_lower:
+                    facts.append("summers in Canada")
+                
+                # Community
+                people_match = re.search(r'(\d+,?\d*)\s*people', piece_lower)
+                if people_match:
+                    facts.append(f"is part of a community of {people_match.group(1)} people")
+                
+                # New park
+                if 'new park' in piece_lower or 'new area' in piece_lower or 'november' in piece_lower:
+                    facts.append("recently moved to a new park")
+        
+        elif theme_id == 'health_recovery':
+            for piece in context_pieces:
+                piece_lower = piece.lower()
+                
+                if 'fell' in piece_lower or 'fall' in piece_lower:
+                    if 'ladder' in piece_lower:
+                        facts.append("fell off a ladder")
+                    else:
+                        facts.append("had a fall")
+                
+                if 'back' in piece_lower:
+                    facts.append("is dealing with back pain")
+                
+                if 'sleep' in piece_lower:
+                    facts.append("has been having trouble sleeping")
+                
+                if 'better' in piece_lower or 'improving' in piece_lower:
+                    facts.append("is slowly recovering")
+        
+        elif theme_id == 'social_life':
+            for piece in context_pieces:
+                piece_lower = piece.lower()
+                
+                if 'poker' in piece_lower:
+                    # Try to find frequency
+                    freq_match = re.search(r'(\d+)\s*times?\s*(a|per)\s*week', piece_lower)
+                    if freq_match:
+                        facts.append(f"plays poker {freq_match.group(1)} times a week")
+                    else:
+                        facts.append("enjoys playing poker")
+                
+                people_match = re.search(r'(\d+)\s*(friends?|people)', piece_lower)
+                if people_match:
+                    facts.append(f"has a social circle of about {people_match.group(1)} friends")
+        
+        elif theme_id == 'family':
+            for piece in context_pieces:
+                piece_lower = piece.lower()
+                
+                # Look for family members
+                if 'daughter' in piece_lower:
+                    # Try to find name
+                    name_match = re.search(r'daughter\s+(\w+)|(\w+)\s+.*daughter', piece_lower)
+                    if name_match:
+                        name = name_match.group(1) or name_match.group(2)
+                        if name and name.lower() not in ['my', 'his', 'her', 'the', 'a']:
+                            facts.append(f"has a daughter named {name.title()}")
+                    else:
+                        facts.append("has a daughter")
+                
+                if 'wife' in piece_lower:
+                    facts.append("is married")
+                
+                if 'grandkid' in piece_lower or 'grandchild' in piece_lower:
+                    facts.append("has grandchildren")
+        
+        # Deduplicate facts
+        unique_facts = list(dict.fromkeys(facts))
+        
+        # Build narrative
+        if unique_facts:
+            # Capitalize first letter of first fact
+            if unique_facts[0] and unique_facts[0][0].islower():
+                unique_facts[0] = unique_facts[0][0].upper() + unique_facts[0][1:]
+            
+            context = f"{elder_name} {', '.join(unique_facts[:4])}."
+        else:
+            # Fallback to generic context
+            theme_name = self.theme_definitions.get(theme_id, {}).get('name', 'various topics')
+            context = f"{elder_name} has shared stories about {theme_name.lower()}."
+        
+        return context
+    
     def _detect_health_events(self, conversations, knowledge_base):
         """Detect significant health events and link related symptoms"""
         event_mentions = defaultdict(list)
@@ -157,24 +581,19 @@ class FamilyDashboardGenerator:
             red_flags = health.get('red_flags', [])
             transcript = conv.get('transcript', '')
             
-            # Detect from health summary
             if summary:
                 self._extract_health_mentions(event_mentions, summary, timestamp, 'health_summary')
             
-            # Detect from red flags
             for flag in red_flags:
                 flag_text = flag if isinstance(flag, str) else str(flag)
                 self._extract_health_mentions(event_mentions, flag_text, timestamp, 'red_flag')
             
-            # Detect from transcript (especially falls)
             if transcript:
                 self._extract_health_mentions(event_mentions, transcript, timestamp, 'transcript')
         
-        # Also check knowledge base
         if knowledge_base:
             self._extract_health_mentions(event_mentions, knowledge_base, '', 'knowledge_base')
         
-        # Consolidate and link events
         events = self._consolidate_health_events(event_mentions)
         return self._link_symptoms_to_causes(events)
     
@@ -185,12 +604,10 @@ class FamilyDashboardGenerator:
         
         text_lower = text.lower()
         
-        # Check for injuries (HIGH PRIORITY)
         for keyword in self.injury_keywords:
             if keyword in text_lower:
                 body_part = self._extract_body_part(text_lower)
                 
-                # Special handling for falls
                 if keyword in ['fell', 'fall', 'fallen', 'ladder']:
                     event_key = f"injury_fall_{body_part or 'general'}"
                     severity = 'high'
@@ -198,7 +615,6 @@ class FamilyDashboardGenerator:
                     event_key = f"injury_{keyword}_{body_part or 'general'}"
                     severity = 'high'
                 
-                # Extract context around the keyword
                 context = self._extract_context(text, keyword)
                 
                 event_mentions[event_key].append({
@@ -211,7 +627,6 @@ class FamilyDashboardGenerator:
                     'severity': severity
                 })
         
-        # Check for symptoms (link to injuries)
         for keyword in self.symptom_keywords:
             if keyword in text_lower:
                 body_part = self._extract_body_part(text_lower)
@@ -262,7 +677,6 @@ class FamilyDashboardGenerator:
             if not mentions:
                 continue
             
-            # Filter out mentions without timestamps (from knowledge base) if we have dated ones
             dated_mentions = [m for m in mentions if m.get('timestamp')]
             if dated_mentions:
                 sorted_mentions = sorted(dated_mentions, key=lambda x: x.get('timestamp', ''))
@@ -275,12 +689,10 @@ class FamilyDashboardGenerator:
             first = sorted_mentions[0]
             last = sorted_mentions[-1]
             
-            # Determine severity
             event_type = first.get('type', 'symptom')
             keyword = first.get('keyword', '')
             body_part = first.get('body_part')
             
-            # Falls are always high severity
             if keyword in ['fell', 'fall', 'fallen', 'ladder'] or event_type == 'injury':
                 severity = 'high'
             elif len(sorted_mentions) >= 3:
@@ -288,7 +700,6 @@ class FamilyDashboardGenerator:
             else:
                 severity = 'low'
             
-            # Generate title
             if keyword in ['fell', 'fall', 'fallen', 'ladder']:
                 title = "Fall Incident"
                 if body_part:
@@ -298,10 +709,8 @@ class FamilyDashboardGenerator:
             else:
                 title = keyword.replace('_', ' ').title()
             
-            # Generate event ID
             event_id = hashlib.md5(f"{event_key}_{first.get('timestamp', 'unknown')}".encode()).hexdigest()[:8]
             
-            # Get best description
             descriptions = [m.get('text', '') for m in sorted_mentions if m.get('text')]
             description = descriptions[0] if descriptions else title
             
@@ -321,7 +730,7 @@ class FamilyDashboardGenerator:
                 'status': 'active',
                 'needs_family_followup': severity == 'high',
                 'mentions_count': len(sorted_mentions),
-                'family_actions': [],  # For Phase 2
+                'family_actions': [],
             })
         
         return events
@@ -339,8 +748,6 @@ class FamilyDashboardGenerator:
                 cause_date = cause.get('detected_on', '')
                 cause_body = cause.get('body_part')
                 
-                # Link if: same body part OR cause has no body part (general injury)
-                # AND cause happened before or same time as symptom
                 if cause_date <= symptom_date or not cause_date:
                     if cause_body == symptom_body or not cause_body or not symptom_body:
                         cause['related_symptoms'].append({
@@ -352,7 +759,6 @@ class FamilyDashboardGenerator:
                         symptom['linked_to_title'] = cause['title']
                         break
         
-        # Sort: high severity first, then by date
         events.sort(key=lambda x: (
             {'high': 0, 'moderate': 1, 'low': 2}.get(x['severity'], 2),
             x.get('detected_on', '') or 'zzz'
@@ -386,7 +792,6 @@ class FamilyDashboardGenerator:
             now = datetime.now(self.local_tz)
             days_since = (now - last_conv).days
         
-        # Engagement
         scores = []
         for conv in conversations:
             eng = conv.get('analysis', {}).get('conversation', {}).get('engagement', 'moderate')
@@ -395,7 +800,6 @@ class FamilyDashboardGenerator:
         avg_eng = sum(scores) / len(scores) if scores else 2
         engagement = 'High' if avg_eng >= 2.5 else 'Moderate' if avg_eng >= 1.5 else 'Low'
         
-        # Mood
         mood_scores = []
         for conv in conversations[-5:]:
             mood = conv.get('analysis', {}).get('conversation', {}).get('mood', 'neutral')
@@ -410,7 +814,6 @@ class FamilyDashboardGenerator:
         avg_mood = sum(mood_scores) / len(mood_scores) if mood_scores else 2
         mood = 'Positive' if avg_mood >= 2.5 else 'Neutral' if avg_mood >= 1.5 else 'Low'
         
-        # Mood context from health events
         mood_context = None
         if health_events:
             high_events = [e for e in health_events if e.get('severity') == 'high' and e.get('status') == 'active']
@@ -524,10 +927,11 @@ class FamilyDashboardGenerator:
         return summaries
     
     def _extract_biographical_quotes(self, conversations):
-        """Extract quotes with rich context"""
+        """
+        Extract quotes - KEPT FOR BACKWARD COMPATIBILITY
+        New code should use in_their_words instead
+        """
         quotes = []
-        
-        meta_keywords = ['ai', 'aila', 'conversation', 'talking', 'understand', 'robot']
         
         for conv in conversations:
             analysis = conv.get('analysis', {})
@@ -539,7 +943,6 @@ class FamilyDashboardGenerator:
             timestamp = conv.get('timestamp', '')
             date_fmt = self._format_date(timestamp)
             
-            # Mood emoji
             mood_lower = str(mood).lower()
             if any(w in mood_lower for w in ['positive', 'happy', 'good']):
                 mood_emoji, mood_label = '😊', 'Happy'
@@ -552,36 +955,23 @@ class FamilyDashboardGenerator:
                 if not quote or not isinstance(quote, str):
                     continue
                 
-                quote_lower = quote.lower()
+                quote_stripped = quote.strip()
                 
-                if any(kw in quote_lower for kw in meta_keywords):
+                # Use improved meta filtering
+                if self._is_meta_quote(quote_stripped):
                     continue
                 
-                if len(quote.split()) < 4 or not quote.strip():
+                if len(quote_stripped.split()) < 5:
                     continue
                 
-                # Find context
-                category = None
-                for story in stories:
-                    if isinstance(story, dict):
-                        topic = story.get('topic', '')
-                    elif isinstance(story, str):
-                        topic = story
-                    else:
-                        continue
-                    
-                    if topic and any(w in quote_lower for w in topic.lower().split()):
-                        category = topic
-                        break
-                
-                if not category:
-                    category = topics[0] if topics else 'Life Story'
+                # Detect theme for category
+                theme_id, theme_name = self._detect_theme(quote_stripped, topics, stories)
                 
                 quotes.append({
-                    'quote': quote.strip(),
+                    'quote': quote_stripped,
                     'date': date_fmt,
                     'timestamp': timestamp,
-                    'category': category,
+                    'category': theme_name,
                     'topics': topics,
                     'mood': mood_label,
                     'mood_emoji': mood_emoji
@@ -730,7 +1120,6 @@ class FamilyDashboardGenerator:
             text = msg.get('concern', str(msg)) if isinstance(msg, dict) else str(msg)
             return any(kw in text.lower() for kw in false_alarm_keywords)
         
-        # Add health event alerts
         if health_events:
             for event in health_events:
                 if event.get('severity') == 'high' and event.get('needs_family_followup'):
@@ -745,14 +1134,12 @@ class FamilyDashboardGenerator:
                         'suggested_action': 'Follow up about this health event'
                     })
         
-        # Add conversation alerts
         for conv in conversations:
             analysis = conv.get('analysis', {})
             
             for flag in analysis.get('health', {}).get('red_flags', []):
                 if not is_false_alarm(flag):
                     text = flag if isinstance(flag, str) else str(flag)
-                    # Skip if covered by health event
                     if health_events and any(e.get('severity') == 'high' for e in health_events):
                         continue
                     alerts.append({
@@ -764,7 +1151,6 @@ class FamilyDashboardGenerator:
                         'action_needed': True
                     })
         
-        # Deduplicate
         seen = set()
         unique = []
         for a in alerts:
@@ -835,7 +1221,6 @@ class FamilyDashboardGenerator:
             })
             return recs
         
-        # Health event follow-ups
         if health_events:
             for event in health_events:
                 if event.get('severity') == 'high' and event.get('needs_family_followup'):
@@ -846,7 +1231,7 @@ class FamilyDashboardGenerator:
                         'action': f"Check in about the {event['title'].lower()} from {event['detected_on_formatted']}",
                         'event_id': event['event_id']
                     })
-                    break  # Just top 1
+                    break
         
         if len(conversations) < 2:
             recs.append({
@@ -856,7 +1241,6 @@ class FamilyDashboardGenerator:
                 'action': 'Suggest 2-3 conversations per week'
             })
         
-        # Stories
         total_stories = sum(len(c.get('analysis', {}).get('biography', {}).get('stories', [])) for c in conversations)
         if total_stories > 0:
             recs.append({
