@@ -179,27 +179,64 @@ class FamilyDashboardGenerator:
         except:
             return 'Unknown'
     
-    def _smart_truncate(self, text, max_length=250):
+    def _smart_truncate(self, text, max_length=350):
         """Truncate text at sentence boundary if possible, otherwise at word boundary"""
-        if not text or len(text) <= max_length:
-            return text
+        if not text:
+            return ""
+        
+        # Clean up the text first
+        text = str(text).strip()
         
         # Remove leading "..." if present
-        if text.startswith('...'):
+        while text.startswith('...'):
             text = text[3:].strip()
+        
+        # Remove trailing artifacts like }' or }}
+        while text and text[-1] in "}'\"]}":
+            text = text[:-1].strip()
+        
+        # Remove JSON-like artifacts
+        text = text.replace("{'", "").replace("'}", "")
+        text = text.replace('{"', "").replace('"}', "")
+        text = text.replace("', '", ", ").replace('", "', ", ")
+        
+        # If already short enough, return as-is
+        if len(text) <= max_length:
+            # Make sure it ends cleanly
+            text = text.rstrip('.,;: ')
+            if text and text[-1] not in '.!?':
+                text += '.'
+            return text
         
         # Try to find a sentence ending within the limit
         truncated = text[:max_length]
         
-        # Look for sentence endings
-        for ending in ['. ', '! ', '? ']:
-            last_end = truncated.rfind(ending)
-            if last_end > max_length * 0.5:  # At least half the length
-                return text[:last_end + 1].strip()
+        # Look for sentence endings (in order of preference)
+        best_end = -1
+        for ending in ['. ', '! ', '? ', '.\n', '!\n', '?\n', '.', '!', '?']:
+            pos = truncated.rfind(ending)
+            if pos > max_length * 0.4:  # At least 40% of the length
+                # Check if this is actually the end of a sentence (not Mr. or Dr.)
+                before = truncated[:pos].split()[-1] if truncated[:pos].split() else ""
+                if before.lower() not in ['mr', 'mrs', 'ms', 'dr', 'st', 'vs', 'etc', 'i.e', 'e.g']:
+                    best_end = pos + len(ending.rstrip())
+                    break
         
-        # No good sentence ending - cut at word boundary
+        if best_end > 0:
+            result = text[:best_end].strip()
+            if result and result[-1] not in '.!?':
+                result += '.'
+            return result
+        
+        # No good sentence ending - try to find a comma or semicolon
+        for sep in [', ', '; ', ' - ', ' – ']:
+            last_sep = truncated.rfind(sep)
+            if last_sep > max_length * 0.5:
+                return text[:last_sep].strip() + '...'
+        
+        # Cut at word boundary
         last_space = truncated.rfind(' ')
-        if last_space > max_length * 0.7:
+        if last_space > max_length * 0.4:
             return text[:last_space].strip() + '...'
         
         # Just truncate and add ...
@@ -707,48 +744,65 @@ class FamilyDashboardGenerator:
         
         text_lower = text.lower()
         
-        # Track what we've already added for this text to avoid duplicates
-        injuries_found = set()
+        # Track what we've added from THIS text passage
+        fall_added = False
+        other_injuries_found = set()
         symptoms_found = set()
         
-        # Check for injuries - group by body part, not keyword
-        for keyword in self.injury_keywords:
-            if keyword in text_lower:
-                body_part = self._extract_body_part(text_lower)
-                
-                # Use body part as primary key to consolidate related injuries
-                # "fell and hurt my back" and "back injured" → same event
-                injury_key = body_part or 'general'
-                
-                # Skip if we already captured an injury for this body part from this text
-                if injury_key in injuries_found:
-                    continue
-                injuries_found.add(injury_key)
-                
-                # Determine if it's a fall (highest priority title)
-                is_fall = any(fw in text_lower for fw in ['fell', 'fall', 'fallen', 'ladder'])
-                
-                if is_fall:
-                    event_key = f"injury_fall_{injury_key}"
-                else:
-                    event_key = f"injury_{injury_key}"
-                
-                context = self._extract_context(text, keyword)
-                
-                event_mentions[event_key].append({
-                    'timestamp': timestamp,
-                    'source': source,
-                    'text': context or text[:200],
-                    'keyword': 'fall' if is_fall else keyword,
-                    'body_part': body_part,
-                    'type': 'injury',
-                    'severity': 'high'
-                })
+        # First check: Is this a FALL incident?
+        is_fall = any(fw in text_lower for fw in ['fell', 'fall', 'fallen', 'ladder'])
+        body_part = self._extract_body_part(text_lower)
+        
+        if is_fall and not fall_added:
+            # ALL fall incidents go to the SAME key - they will be merged
+            event_key = "injury_fall_primary"
+            
+            # Find the best keyword for context extraction
+            for kw in ['fell', 'fall', 'ladder']:
+                if kw in text_lower:
+                    context = self._extract_context(text, kw)
+                    break
+            else:
+                context = text[:200]
+            
+            event_mentions[event_key].append({
+                'timestamp': timestamp,
+                'source': source,
+                'text': context or text[:200],
+                'keyword': 'fall',
+                'body_part': body_part,  # Keep body part for title
+                'type': 'injury',
+                'severity': 'high'
+            })
+            fall_added = True
+        
+        # Check for OTHER injuries (not falls)
+        if not is_fall:
+            for keyword in self.injury_keywords:
+                if keyword in text_lower and keyword not in ['fell', 'fall', 'fallen', 'ladder']:
+                    injury_key = body_part or 'general'
+                    
+                    if injury_key in other_injuries_found:
+                        continue
+                    other_injuries_found.add(injury_key)
+                    
+                    event_key = f"injury_{keyword}_{injury_key}"
+                    context = self._extract_context(text, keyword)
+                    
+                    event_mentions[event_key].append({
+                        'timestamp': timestamp,
+                        'source': source,
+                        'text': context or text[:200],
+                        'keyword': keyword,
+                        'body_part': body_part,
+                        'type': 'injury',
+                        'severity': 'high'
+                    })
         
         # Check for symptoms - group by symptom type + body part
         for keyword in self.symptom_keywords:
             if keyword in text_lower:
-                body_part = self._extract_body_part(text_lower)
+                bp = self._extract_body_part(text_lower)
                 
                 # Normalize symptom keywords
                 if 'pain' in keyword or 'ache' in keyword:
@@ -758,9 +812,8 @@ class FamilyDashboardGenerator:
                 else:
                     symptom_type = keyword.replace(' ', '_')
                 
-                symptom_key = f"{symptom_type}_{body_part or 'general'}"
+                symptom_key = f"{symptom_type}_{bp or 'general'}"
                 
-                # Skip if we already captured this symptom type
                 if symptom_key in symptoms_found:
                     continue
                 symptoms_found.add(symptom_key)
@@ -773,28 +826,47 @@ class FamilyDashboardGenerator:
                     'source': source,
                     'text': context or text[:200],
                     'keyword': keyword,
-                    'body_part': body_part,
+                    'body_part': bp,
                     'type': 'symptom',
                     'severity': 'moderate'
                 })
     
     def _extract_context(self, text, keyword):
         """Extract surrounding context for a keyword"""
+        if not text:
+            return None
+            
         text_lower = text.lower()
         idx = text_lower.find(keyword)
         if idx == -1:
             return None
         
-        start = max(0, idx - 50)
-        end = min(len(text), idx + len(keyword) + 100)
+        # Get more context - 80 chars before, 150 after
+        start = max(0, idx - 80)
+        end = min(len(text), idx + len(keyword) + 150)
         
         context = text[start:end].strip()
-        if start > 0:
-            context = "..." + context
-        if end < len(text):
-            context = context + "..."
         
-        return context
+        # Try to start at a sentence or word boundary
+        if start > 0:
+            # Look for sentence start
+            first_period = context.find('. ')
+            first_capital_after = -1
+            for i, c in enumerate(context):
+                if c.isupper() and i > 0:
+                    first_capital_after = i
+                    break
+            
+            if first_period != -1 and first_period < 30:
+                context = context[first_period + 2:]
+            elif first_capital_after != -1 and first_capital_after < 20:
+                context = context[first_capital_after:]
+        
+        # Clean up any JSON artifacts
+        context = context.replace("'}", "").replace('"}', "").replace("{'", "").replace('{"', "")
+        context = context.replace("', '", ", ").replace('", "', ", ")
+        
+        return context.strip()
     
     def _extract_body_part(self, text):
         """Extract body part mentioned in text"""
@@ -825,16 +897,25 @@ class FamilyDashboardGenerator:
             
             event_type = first.get('type', 'symptom')
             keyword = first.get('keyword', '')
-            body_part = first.get('body_part')
             
-            if keyword in ['fell', 'fall', 'fallen', 'ladder'] or event_type == 'injury':
+            # Check ALL mentions for body part (some may have it, some may not)
+            body_part = None
+            for m in sorted_mentions:
+                if m.get('body_part'):
+                    body_part = m['body_part']
+                    break
+            
+            if keyword in ['fell', 'fall', 'fallen', 'ladder'] or 'fall' in event_key:
+                severity = 'high'
+            elif event_type == 'injury':
                 severity = 'high'
             elif len(sorted_mentions) >= 3:
                 severity = 'moderate'
             else:
                 severity = 'low'
             
-            if keyword in ['fell', 'fall', 'fallen', 'ladder']:
+            # Generate title
+            if keyword in ['fell', 'fall', 'fallen', 'ladder'] or 'fall' in event_key:
                 title = "Fall Incident"
                 if body_part:
                     title = f"Fall Incident - {body_part.title()} Injury"
@@ -845,11 +926,16 @@ class FamilyDashboardGenerator:
             
             event_id = hashlib.md5(f"{event_key}_{first.get('timestamp', 'unknown')}".encode()).hexdigest()[:8]
             
+            # Get the BEST description (longest, most informative)
             descriptions = [m.get('text', '') for m in sorted_mentions if m.get('text')]
-            description = descriptions[0] if descriptions else title
+            if descriptions:
+                # Pick the longest description
+                description = max(descriptions, key=len)
+            else:
+                description = title
             
-            # Smart truncate - prefer cutting at sentence boundary
-            description = self._smart_truncate(description, 250)
+            # Clean and truncate description
+            description = self._smart_truncate(description, 350)
             
             events.append({
                 'event_id': f"HE_{event_id}",
@@ -881,33 +967,87 @@ class FamilyDashboardGenerator:
         symptoms = [e for e in events if e['type'] == 'symptom']
         other = [e for e in events if e['type'] not in ['injury', 'symptom']]
         
-        # Group injuries by body part
+        # STEP 1A: First merge ALL fall incidents together (they're the same event)
+        fall_injuries = [i for i in injuries if 'fall' in i.get('title', '').lower() or 'fall' in i.get('keyword', '').lower()]
+        non_fall_injuries = [i for i in injuries if i not in fall_injuries]
+        
+        merged_injuries = []
+        
+        # Merge all fall incidents into one
+        if fall_injuries:
+            # Find the one with body part (most specific)
+            primary = None
+            for inj in fall_injuries:
+                if inj.get('body_part'):
+                    primary = inj
+                    break
+            
+            if not primary:
+                primary = fall_injuries[0]
+            
+            # Ensure good title
+            if primary.get('body_part'):
+                primary['title'] = f"Fall Incident - {primary['body_part'].title()} Injury"
+            else:
+                primary['title'] = "Fall Incident"
+            
+            # Merge all descriptions and data
+            all_descriptions = []
+            total_mentions = 0
+            earliest_date = primary.get('detected_on', '')
+            latest_date = primary.get('last_mentioned', '')
+            all_body_parts = set()
+            
+            for inj in fall_injuries:
+                if inj.get('description'):
+                    all_descriptions.append(inj['description'])
+                total_mentions += inj.get('mentions_count', 1)
+                
+                if inj.get('body_part'):
+                    all_body_parts.add(inj['body_part'])
+                
+                inj_date = inj.get('detected_on', '')
+                if inj_date and (not earliest_date or inj_date < earliest_date):
+                    earliest_date = inj_date
+                
+                inj_last = inj.get('last_mentioned', '')
+                if inj_last and (not latest_date or inj_last > latest_date):
+                    latest_date = inj_last
+            
+            # Use the best description
+            best_description = max(all_descriptions, key=len) if all_descriptions else primary.get('description', '')
+            
+            # Update primary with merged data
+            primary['description'] = self._smart_truncate(best_description, 300)
+            primary['mentions_count'] = total_mentions
+            primary['detected_on'] = earliest_date
+            primary['detected_on_formatted'] = self._format_date(earliest_date)
+            primary['last_mentioned'] = latest_date
+            primary['last_mentioned_formatted'] = self._format_date(latest_date)
+            
+            # If we found body parts, update
+            if all_body_parts:
+                primary['body_part'] = list(all_body_parts)[0]  # Use first found
+                primary['title'] = f"Fall Incident - {primary['body_part'].title()} Injury"
+            
+            merged_injuries.append(primary)
+        
+        # STEP 1B: Group remaining (non-fall) injuries by body part
         injuries_by_body = {}
-        for injury in injuries:
+        for injury in non_fall_injuries:
             body = injury.get('body_part') or 'general'
             if body not in injuries_by_body:
                 injuries_by_body[body] = []
             injuries_by_body[body].append(injury)
         
-        # Merge injuries with same body part
-        merged_injuries = []
+        # Merge non-fall injuries with same body part
         for body, body_injuries in injuries_by_body.items():
             if len(body_injuries) == 1:
                 merged_injuries.append(body_injuries[0])
             else:
                 # Multiple injuries for same body part - merge them
-                # Prefer "Fall Incident" as the primary title
-                primary = None
-                for inj in body_injuries:
-                    if 'fall' in inj.get('title', '').lower():
-                        primary = inj
-                        break
+                primary = body_injuries[0]
                 
-                if not primary:
-                    # No fall - use first one
-                    primary = body_injuries[0]
-                
-                # Merge all descriptions and mentions counts
                 all_descriptions = []
                 total_mentions = 0
                 earliest_date = primary.get('detected_on', '')
@@ -926,10 +1066,9 @@ class FamilyDashboardGenerator:
                     if inj_last and (not latest_date or inj_last > latest_date):
                         latest_date = inj_last
                 
-                # Use the best (longest) description
                 best_description = max(all_descriptions, key=len) if all_descriptions else primary.get('description', '')
                 
-                primary['description'] = self._smart_truncate(best_description, 250)
+                primary['description'] = self._smart_truncate(best_description, 300)
                 primary['mentions_count'] = total_mentions
                 primary['detected_on'] = earliest_date
                 primary['detected_on_formatted'] = self._format_date(earliest_date)
@@ -1075,8 +1214,18 @@ class FamilyDashboardGenerator:
         if health_events:
             active_high = [e for e in health_events if e.get('severity') == 'high']
             if active_high:
-                titles = [e['title'] for e in active_high[:3]]
-                active_summary = f"Active concerns: {', '.join(titles)}"
+                # Deduplicate - only one fall incident
+                seen_fall = False
+                unique_titles = []
+                for e in active_high:
+                    title = e['title']
+                    if 'fall' in title.lower():
+                        if seen_fall:
+                            continue
+                        seen_fall = True
+                    unique_titles.append(title)
+                
+                active_summary = f"Active concerns: {', '.join(unique_titles[:3])}"
         
         return {
             'current_status': latest_health or 'No recent health information',
@@ -1329,13 +1478,21 @@ class FamilyDashboardGenerator:
             text = msg.get('concern', str(msg)) if isinstance(msg, dict) else str(msg)
             return any(kw in text.lower() for kw in false_alarm_keywords)
         
+        # Add alerts from health events - but only ONE fall incident
+        fall_alert_added = False
         if health_events:
             for event in health_events:
                 if event.get('severity') == 'high' and event.get('needs_family_followup'):
+                    # Skip additional fall incidents - they should be merged
+                    if 'fall' in event.get('title', '').lower():
+                        if fall_alert_added:
+                            continue
+                        fall_alert_added = True
+                    
                     alerts.append({
                         'type': 'health_event',
                         'severity': 'high',
-                        'message': f"{event['title']}: {event['description'][:100]}",
+                        'message': f"{event['title']}: {event['description']}",
                         'event_id': event['event_id'],
                         'date': event.get('detected_on', ''),
                         'date_formatted': event.get('detected_on_formatted', ''),
@@ -1360,12 +1517,21 @@ class FamilyDashboardGenerator:
                         'action_needed': True
                     })
         
+        # Deduplicate - use smarter matching
         seen = set()
         unique = []
         for a in alerts:
-            msg = a.get('message', '').lower()[:50]
-            if msg not in seen:
-                seen.add(msg)
+            msg = a.get('message', '').lower()
+            
+            # Create a simplified key for deduplication
+            # Fall incidents should all map to same key
+            if 'fall' in msg:
+                dedup_key = 'fall_incident'
+            else:
+                dedup_key = msg[:50]
+            
+            if dedup_key not in seen:
+                seen.add(dedup_key)
                 unique.append(a)
         
         return sorted(unique, key=lambda x: ({'high': 0, 'medium': 1}.get(x.get('severity'), 2)))[:5]
