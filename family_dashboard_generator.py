@@ -666,6 +666,12 @@ class FamilyDashboardGenerator:
             
             # Generate a nice theme display name
             theme_name = self._generate_theme_display_name(theme_id, data['original_topics'])
+            
+            # FINAL CHECK: Skip if theme name still looks like a meta topic
+            if self._is_meta_topic(theme_name) or self._is_meta_topic(theme_id):
+                meta_filtered_count += 1
+                continue
+            
             icon = data.get('icon', '💬')
             
             # Deduplicate quotes
