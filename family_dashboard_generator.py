@@ -139,6 +139,18 @@ class FamilyDashboardGenerator:
             r"^that'?s (right|true|correct)[\.\?!]?$",
             r"^i don'?t know[\.\?!]?$",
             r"^not really[\.\?!]?$",
+            
+            # Vague/filler responses
+            r"^well,? i (do )?(think|guess|suppose)",
+            r"i think them through",
+            r"^i'?m not sure",
+            r"^i (would|could) say",
+            r"^it'?s (hard|difficult) to (say|explain)",
+            r"^that depends",
+            r"^in a way",
+            r"^sort of",
+            r"^kind of",
+            r"^i mean",
         ]
         
         # Compile patterns for efficiency
@@ -199,6 +211,66 @@ class FamilyDashboardGenerator:
             return True
         
         return False
+    
+    def _analyze_quote_sentiment(self, quote, default_emoji, default_label):
+        """
+        Analyze the quote content and return appropriate mood emoji/label.
+        Override conversation mood when quote content suggests different sentiment.
+        """
+        if not quote:
+            return default_emoji, default_label
+        
+        quote_lower = quote.lower()
+        
+        # Pain/injury indicators - use 💪 Persevering (they're sharing, being strong)
+        pain_words = ['pain', 'hurt', 'sore', 'ache', 'bruise', 'injured', 'injury',
+                     'stiff', 'swollen', 'inflammation', 'discomfort']
+        if any(word in quote_lower for word in pain_words):
+            return '💪', 'Persevering'
+        
+        # Struggle/difficulty indicators - use 😓 Struggling  
+        struggle_words = ['tough', 'difficult', 'hard time', "couldn't", "can't", 
+                         'struggle', 'terrible', 'awful', 'worst', 'rough',
+                         'trouble sleeping', "couldn't sleep", "can't sleep"]
+        if any(word in quote_lower for word in struggle_words):
+            return '😓', 'Struggling'
+        
+        # Recovery/improvement indicators - use 🌱 Recovering
+        recovery_words = ['better', 'improving', 'healing', 'recovered', 'getting better',
+                         'feeling better', 'bit better', 'little better']
+        if any(word in quote_lower for word in recovery_words):
+            return '🌱', 'Recovering'
+        
+        # Worry/concern indicators - use 😟 Concerned
+        worry_words = ['worried', 'anxious', 'nervous', 'scared', 'afraid', 'concern']
+        if any(word in quote_lower for word in worry_words):
+            return '😟', 'Concerned'
+        
+        # Gratitude/appreciation - use 🙏 Grateful
+        gratitude_words = ['grateful', 'thankful', 'blessed', 'appreciate', 'lucky']
+        if any(word in quote_lower for word in gratitude_words):
+            return '🙏', 'Grateful'
+        
+        # Joy/excitement - use 😊 Happy
+        joy_words = ['love', 'enjoy', 'wonderful', 'amazing', 'fantastic', 'great time',
+                    'rewarding', 'beautiful', 'exciting', 'fun']
+        if any(word in quote_lower for word in joy_words):
+            return '😊', 'Happy'
+        
+        # Nostalgia/reflection - use 💭 Nostalgic
+        nostalgia_words = ['remember', 'years ago', 'used to', 'back then', 'childhood',
+                          'grew up', 'when i was', 'memories']
+        if any(word in quote_lower for word in nostalgia_words):
+            return '💭', 'Nostalgic'
+        
+        # Wisdom/philosophical - use 🌟 Reflective
+        wisdom_words = ['learn', 'realize', 'understand', 'life is', 'important thing',
+                       'adventure', 'perspective', 'open-minded']
+        if any(word in quote_lower for word in wisdom_words):
+            return '🌟', 'Reflective'
+        
+        # Default to conversation mood
+        return default_emoji, default_label
     
     def _detect_theme(self, text, topics=None, stories=None):
         """Detect the most relevant theme for a piece of text"""
@@ -342,14 +414,14 @@ class FamilyDashboardGenerator:
             timestamp = conv.get('timestamp', '')
             date_fmt = self._format_date(timestamp)
             
-            # Get mood info
-            mood_lower = str(mood).lower()
-            if any(w in mood_lower for w in ['positive', 'happy', 'good', 'cheerful']):
-                mood_emoji, mood_label = '😊', 'Happy'
-            elif any(w in mood_lower for w in ['negative', 'sad', 'upset', 'worried']):
-                mood_emoji, mood_label = '😔', 'Reflective'
+            # Get conversation mood (will be overridden per-quote)
+            conv_mood_lower = str(mood).lower()
+            if any(w in conv_mood_lower for w in ['positive', 'happy', 'good', 'cheerful']):
+                conv_mood_emoji, conv_mood_label = '😊', 'Happy'
+            elif any(w in conv_mood_lower for w in ['negative', 'sad', 'upset', 'worried']):
+                conv_mood_emoji, conv_mood_label = '😔', 'Reflective'
             else:
-                mood_emoji, mood_label = '😌', 'Relaxed'
+                conv_mood_emoji, conv_mood_label = '😌', 'Relaxed'
             
             # Process stories for context building
             for story in stories:
@@ -396,12 +468,17 @@ class FamilyDashboardGenerator:
                 # Detect theme for this quote
                 theme_id, _ = self._detect_theme(quote_stripped, topics, stories)
                 
+                # Analyze quote-specific sentiment (override conversation mood if needed)
+                quote_mood_emoji, quote_mood_label = self._analyze_quote_sentiment(
+                    quote_stripped, conv_mood_emoji, conv_mood_label
+                )
+                
                 theme_data[theme_id]['quotes'].append({
                     'quote': quote_stripped,
                     'date': date_fmt,
                     'timestamp': timestamp,
-                    'mood': mood_label,
-                    'mood_emoji': mood_emoji
+                    'mood': quote_mood_label,
+                    'mood_emoji': quote_mood_emoji
                 })
                 
                 # Update timestamps
@@ -943,13 +1020,14 @@ class FamilyDashboardGenerator:
             timestamp = conv.get('timestamp', '')
             date_fmt = self._format_date(timestamp)
             
+            # Get conversation default mood
             mood_lower = str(mood).lower()
             if any(w in mood_lower for w in ['positive', 'happy', 'good']):
-                mood_emoji, mood_label = '😊', 'Happy'
+                conv_mood_emoji, conv_mood_label = '😊', 'Happy'
             elif any(w in mood_lower for w in ['negative', 'sad', 'upset']):
-                mood_emoji, mood_label = '😔', 'Reflective'
+                conv_mood_emoji, conv_mood_label = '😔', 'Reflective'
             else:
-                mood_emoji, mood_label = '😌', 'Relaxed'
+                conv_mood_emoji, conv_mood_label = '😌', 'Relaxed'
             
             for quote in conv_quotes:
                 if not quote or not isinstance(quote, str):
@@ -967,14 +1045,19 @@ class FamilyDashboardGenerator:
                 # Detect theme for category
                 theme_id, theme_name = self._detect_theme(quote_stripped, topics, stories)
                 
+                # Analyze quote-specific sentiment
+                quote_mood_emoji, quote_mood_label = self._analyze_quote_sentiment(
+                    quote_stripped, conv_mood_emoji, conv_mood_label
+                )
+                
                 quotes.append({
                     'quote': quote_stripped,
                     'date': date_fmt,
                     'timestamp': timestamp,
                     'category': theme_name,
                     'topics': topics,
-                    'mood': mood_label,
-                    'mood_emoji': mood_emoji
+                    'mood': quote_mood_label,
+                    'mood_emoji': quote_mood_emoji
                 })
         
         # Deduplicate
