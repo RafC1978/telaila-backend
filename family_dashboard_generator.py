@@ -85,29 +85,48 @@ class FamilyDashboardGenerator:
         }
         
         # Keywords to help categorize topics into icon groups
+        # NOTE: Order matters for overlapping keywords - more specific first!
         self.topic_categories = {
+            # Check these FIRST (more specific)
+            'shopping': ['bookstore', 'shop', 'shopping', 'store', 'market', 'buy', 'bought'],
+            'pets': ['dog', 'cat', 'cats', 'pet', 'animal', 'kitten', 'puppy'],
+            'weather': ['weather', 'rain', 'sunny', 'cold', 'warm', 'snow'],
+            'books': ['book', 'read', 'reading', 'mystery', 'novel', 'show', 'tv', 'author', 'library'],
+            
+            # Then broader categories
             'family': ['family', 'daughter', 'son', 'wife', 'husband', 'grandkid', 'grandson', 
-                      'granddaughter', 'mother', 'father', 'sister', 'brother', 'parent', 'child', 
-                      'kids', 'visit', 'visiting'],
+                      'granddaughter', 'mother', 'father', 'sister', 'brother', 'parent', 'child', 'kids',
+                      'visit with son', 'visit with daughter', 'son\'s visit', 'daughter\'s visit'],
             'health': ['health', 'doctor', 'hospital', 'pain', 'sick', 'medicine', 'injury', 
                       'recovery', 'appointment', 'eye doctor'],
             'travel': ['travel', 'trip', 'vacation', 'journey', 'flight', 'cruise', 'adventure'],
-            'home': ['home', 'house', 'apartment', 'living', 'moved', 'neighborhood', 'routine', 'morning'],
+            'home': ['home', 'house', 'apartment', 'moved', 'neighborhood', 'routine', 'morning'],
             'work': ['work', 'job', 'career', 'business', 'office', 'retired', 'profession'],
-            'hobbies': ['hobby', 'craft', 'collect', 'build', 'create', 'project', 'knitting', 'sewing'],
-            'friends': ['friend', 'neighbor', 'community', 'social', 'club', 'group', 'reconnect'],
+            'hobbies': ['hobby', 'craft', 'collect', 'build', 'create', 'project', 'knitting', 'sewing', 'woodworking'],
+            'friends': ['friend', 'neighbor', 'community', 'club', 'group', 'reconnect'],
             'memories': ['remember', 'childhood', 'grew up', 'years ago', 'used to', 'back then', 'history'],
-            'food': ['cook', 'recipe', 'food', 'meal', 'dinner', 'lunch', 'baking', 'kitchen', 'tea'],
-            'nature': ['garden', 'flowers', 'plants', 'nature', 'outdoors', 'birds', 'spring', 
+            'food': ['cook', 'recipe', 'food', 'meal', 'baking', 'kitchen', 'tea'],
+            'nature': ['garden', 'flowers', 'plants', 'outdoors', 'birds', 'spring', 
                       'crocus', 'bloom', 'tree'],
-            'pets': ['dog', 'cat', 'cats', 'pet', 'animal', 'kitten', 'puppy'],
             'music': ['music', 'song', 'sing', 'instrument', 'concert'],
-            'books': ['book', 'read', 'reading', 'story', 'author', 'library', 'mystery', 'novel', 'show', 'tv'],
             'sports': ['golf', 'fishing', 'sports', 'game', 'exercise', 'walk', 'walking'],
             'faith': ['church', 'faith', 'pray', 'god', 'spiritual', 'religion'],
-            'weather': ['weather', 'rain', 'sun', 'sunny', 'cold', 'warm', 'snow'],
-            'shopping': ['shop', 'shopping', 'store', 'bookstore', 'market', 'buy', 'bought']
         }
+        
+        # Words that should NOT trigger category matching (too ambiguous)
+        # Format: category -> list of (blocker_phrase, exception_keywords)
+        # If exception keywords are found, the blocker doesn't apply
+        self.category_blockers = {
+            'nature': {
+                'blockers': ['nature of', 'human nature', 'by nature'],
+                'exceptions': []
+            },
+        }
+        
+        # Keywords that indicate family context (used to override blockers)
+        self.family_keywords = ['son', 'daughter', 'wife', 'husband', 'grandkid', 'grandson', 
+                               'granddaughter', 'mother', 'father', 'sister', 'brother', 
+                               'family', 'parent', 'child', 'kids']
         
         # Meta topics to FILTER OUT (not real topics)
         self.meta_topic_patterns = [
@@ -456,14 +475,10 @@ class FamilyDashboardGenerator:
         Create a normalized theme ID that groups SIMILAR topics together,
         but preserves distinct meaningful topics.
         
-        LESS AGGRESSIVE than before:
-        - "back recovery" + "back pain" → "back" (same subject)
-        - "snowbird lifestyle" stays as "snowbird" (distinct topic)
-        - "poker games" stays as "poker" (distinct topic)
-        - "crocuses" + "spring flowers" → "nature" (similar enough)
-        
-        We want GT to have: Snowbird Life, Poker & Social, Health Recovery, etc.
-        NOT everything lumped into "Health & Wellness"
+        Strategy:
+        1. Check for specific distinct topics (snowbird, poker, etc.)
+        2. Check if topic matches a broad category (family, nature, etc.)
+        3. Only fall back to raw word extraction if nothing else matches
         """
         if not topic:
             return 'general'
@@ -476,31 +491,58 @@ class FamilyDashboardGenerator:
             'poker': 'poker',
             'rv life': 'rv_life',
             'rv ': 'rv_life',
-            'trailer': 'rv_life', 
-            'dinner': 'social_outings',
-            'lunch': 'social_outings',
+            'rv water': 'rv_life',
+            'trailer park': 'rv_life', 
+            'dinner out': 'social_outings',
+            'dinner with': 'social_outings',
+            'lunch out': 'social_outings',
+            'lunch with': 'social_outings',
             'restaurant': 'social_outings',
             'chinese food': 'social_outings',
             'sushi': 'social_outings',
-            'storage': 'daily_errands',
-            'errand': 'daily_errands',
-            'keys': 'daily_errands',
+            'storage facility': 'daily_errands',
             'lockout': 'daily_errands',
+            'getting keys': 'daily_errands',
+            'visitors to': 'visitors',
+            'canadian visitors': 'visitors',
+            'nature of ai': 'conversations',
+            'nature of consciousness': 'conversations',
+            'ai consciousness': 'conversations',
+            'human vs ai': 'conversations',
+            'problem-solving': 'conversations',
         }
         
         for keyword, theme_id in specific_topics.items():
             if keyword in topic_lower:
                 return theme_id
         
-        # PRIORITY 2: Extract primary subject from topic
-        # "back recovery progress" → "back"
-        # "sleep challenges" → "sleep"
-        # "weather conditions" → "weather"
+        # PRIORITY 2: Check broad categories (with blocker check)
+        for category, keywords in self.topic_categories.items():
+            # Check if any blocker phrase is present for this category
+            blocker_info = self.category_blockers.get(category, {})
+            blockers = blocker_info.get('blockers', []) if isinstance(blocker_info, dict) else []
+            
+            blocked = False
+            for blocker in blockers:
+                if blocker in topic_lower:
+                    blocked = True
+                    break
+            
+            if blocked:
+                continue
+            
+            # Check if any keyword matches
+            for kw in keywords:
+                if kw in topic_lower:
+                    return category
+        
+        # PRIORITY 3: Extract primary word and check special mappings
         common_words = {
             'the', 'a', 'an', 'and', 'or', 'with', 'about', 'for', 'to', 'of', 
             'in', 'on', 'at', 'by', 'progress', 'challenges', 'conditions',
             'management', 'incident', 'question', 'lifestyle', 'connections',
-            'nature', 'perspectives', 'adventures', 'technical'
+            'perspectives', 'adventures', 'technical', 'recent', 'new', 'old',
+            'outing', 'like', 'living', 'facility'
         }
         
         words = re.findall(r'[a-z]+', topic_lower)
@@ -512,39 +554,47 @@ class FamilyDashboardGenerator:
                 break
         
         if primary_word:
-            # Map some primary words to better theme IDs
+            # Map specific words to themes
             word_mappings = {
+                # Health
                 'back': 'health_recovery',
                 'sleep': 'health_recovery', 
                 'pain': 'health_recovery',
                 'injury': 'health_recovery',
                 'recovery': 'health_recovery',
-                'weather': 'weather',
+                
+                # Social
                 'canadian': 'visitors',
                 'visitors': 'visitors',
-                'friends': 'friends_social',
-                'friendships': 'friends_social',
-                'social': 'friends_social',
-                'emergency': 'daily_life',
-                'contact': 'daily_life',
-                'water': 'rv_life',
-                'tank': 'rv_life',
-                'problem': 'daily_life',
-                'solving': 'daily_life',
-                'human': 'conversations',  # AI consciousness topic
+                
+                # AI/meta (filter these out or group them)
+                'human': 'conversations',
                 'consciousness': 'conversations',
                 'empathy': 'conversations',
+                'problem': 'conversations',
+                'solving': 'conversations',
+                'capabilities': 'conversations',
+                
+                # Daily life
+                'emergency': 'daily_life',
+                'contact': 'daily_life',
+                'errands': 'daily_errands',
+                'keys': 'daily_errands',
+                'storage': 'daily_errands',
+                
+                # RV/travel
+                'water': 'rv_life',
+                'tank': 'rv_life',
             }
             
-            return word_mappings.get(primary_word, primary_word)
+            if primary_word in word_mappings:
+                return word_mappings[primary_word]
         
-        # FALLBACK: Use generic category matching (least preferred)
-        for category, keywords in self.topic_categories.items():
-            for kw in keywords:
-                if kw in topic_lower:
-                    return category
+        # FINAL FALLBACK: Return primary word as-is (rare)
+        if primary_word:
+            return primary_word
         
-        return self._make_theme_id(topic)
+        return 'general'
     
     def _make_theme_id(self, topic):
         """Create a safe theme ID from a topic"""
