@@ -60,35 +60,52 @@ class FamilyDashboardGenerator:
             'daily_life': '☀️',
             'food': '🍽️',
             'nature': '🌿',
-            'pets': '🐕',
+            'pets': '🐾',
             'music': '🎵',
             'books': '📚',
             'sports': '⚽',
             'garden': '🌻',
             'crafts': '🎨',
             'faith': '🙏',
+            'weather': '🌤️',
+            'shopping': '🛍️',
             'general': '💬'
         }
         
         # Keywords to help categorize topics into icon groups
         self.topic_categories = {
             'family': ['family', 'daughter', 'son', 'wife', 'husband', 'grandkid', 'grandson', 
-                      'granddaughter', 'mother', 'father', 'sister', 'brother', 'parent', 'child', 'kids'],
-            'health': ['health', 'doctor', 'hospital', 'pain', 'sick', 'medicine', 'injury', 'recovery'],
-            'travel': ['travel', 'trip', 'vacation', 'visit', 'journey', 'flight', 'cruise', 'adventure'],
-            'home': ['home', 'house', 'apartment', 'living', 'moved', 'neighborhood'],
+                      'granddaughter', 'mother', 'father', 'sister', 'brother', 'parent', 'child', 
+                      'kids', 'visit', 'visiting'],
+            'health': ['health', 'doctor', 'hospital', 'pain', 'sick', 'medicine', 'injury', 
+                      'recovery', 'appointment', 'eye doctor'],
+            'travel': ['travel', 'trip', 'vacation', 'journey', 'flight', 'cruise', 'adventure'],
+            'home': ['home', 'house', 'apartment', 'living', 'moved', 'neighborhood', 'routine', 'morning'],
             'work': ['work', 'job', 'career', 'business', 'office', 'retired', 'profession'],
-            'hobbies': ['hobby', 'craft', 'collect', 'build', 'create', 'project'],
-            'friends': ['friend', 'neighbor', 'community', 'social', 'club', 'group'],
+            'hobbies': ['hobby', 'craft', 'collect', 'build', 'create', 'project', 'knitting', 'sewing'],
+            'friends': ['friend', 'neighbor', 'community', 'social', 'club', 'group', 'reconnect'],
             'memories': ['remember', 'childhood', 'grew up', 'years ago', 'used to', 'back then', 'history'],
-            'food': ['cook', 'recipe', 'food', 'meal', 'dinner', 'lunch', 'baking', 'kitchen'],
-            'nature': ['garden', 'flowers', 'plants', 'nature', 'outdoors', 'birds', 'weather'],
-            'pets': ['dog', 'cat', 'pet', 'animal'],
+            'food': ['cook', 'recipe', 'food', 'meal', 'dinner', 'lunch', 'baking', 'kitchen', 'tea'],
+            'nature': ['garden', 'flowers', 'plants', 'nature', 'outdoors', 'birds', 'spring', 
+                      'crocus', 'bloom', 'tree'],
+            'pets': ['dog', 'cat', 'cats', 'pet', 'animal', 'kitten', 'puppy'],
             'music': ['music', 'song', 'sing', 'instrument', 'concert'],
-            'books': ['book', 'read', 'story', 'author', 'library'],
-            'sports': ['golf', 'fishing', 'sports', 'game', 'exercise', 'walk'],
-            'faith': ['church', 'faith', 'pray', 'god', 'spiritual', 'religion']
+            'books': ['book', 'read', 'reading', 'story', 'author', 'library', 'mystery', 'novel', 'show', 'tv'],
+            'sports': ['golf', 'fishing', 'sports', 'game', 'exercise', 'walk', 'walking'],
+            'faith': ['church', 'faith', 'pray', 'god', 'spiritual', 'religion'],
+            'weather': ['weather', 'rain', 'sun', 'sunny', 'cold', 'warm', 'snow'],
+            'shopping': ['shop', 'shopping', 'store', 'bookstore', 'market', 'buy', 'bought']
         }
+        
+        # Meta topics to FILTER OUT (not real topics)
+        self.meta_topic_patterns = [
+            r'introduction',
+            r'purpose of (call|conversation)',
+            r'getting to know',
+            r'first (call|conversation|chat)',
+            r'how (aila|the system) works',
+            r'explain(ing)? (the|how)',
+        ]
         
         # Meta-quote patterns to filter OUT (regex)
         self.meta_patterns = [
@@ -363,21 +380,93 @@ class FamilyDashboardGenerator:
         return 'life_stories', 'Life Stories', '💬'
     
     def _format_theme_name(self, topic):
-        """Convert a topic string into a nice theme name"""
+        """Convert a topic string into a clean, short theme name"""
         if not topic:
             return 'Life Stories'
         
         # Clean up the topic
         name = topic.strip()
         
-        # Capitalize properly
-        if name.islower():
-            name = name.title()
+        # If very long, try to extract the key noun phrase
+        if len(name) > 40:
+            # Try to get first meaningful phrase before "and", "with", etc.
+            for splitter in [' and ', ' with ', ' about ', ' - ', ', ']:
+                if splitter in name.lower():
+                    parts = name.split(splitter[0].upper() + splitter[1:] if splitter[0].isupper() else splitter)
+                    if not parts:
+                        parts = name.lower().split(splitter)
+                    if parts and len(parts[0]) > 3:
+                        name = parts[0].strip()
+                        break
+        
+        # Truncate if still too long
+        if len(name) > 35:
+            # Cut at last space before limit
+            if ' ' in name[:35]:
+                name = name[:35].rsplit(' ', 1)[0]
+            else:
+                name = name[:32] + '...'
+        
+        # Fix capitalization - title case but preserve apostrophes properly
+        words = name.split()
+        formatted_words = []
+        for word in words:
+            if word.upper() == word and len(word) > 2:  # All caps like "TV"
+                formatted_words.append(word)
+            elif "'" in word:  # Handle apostrophes like "Son's"
+                parts = word.split("'")
+                formatted_words.append("'".join(p.capitalize() if i == 0 else p.lower() for i, p in enumerate(parts)))
+            else:
+                formatted_words.append(word.capitalize())
+        
+        name = ' '.join(formatted_words)
         
         # Handle some common patterns
         name = name.replace('_', ' ')
         
         return name
+    
+    def _is_meta_topic(self, topic):
+        """Check if a topic is a meta-topic (about the conversation itself, not real content)"""
+        if not topic:
+            return False
+        
+        topic_lower = topic.lower()
+        
+        for pattern in self.meta_topic_patterns:
+            if re.search(pattern, topic_lower):
+                return True
+        
+        return False
+    
+    def _normalize_theme_id(self, topic):
+        """
+        Create a normalized theme ID that groups similar topics together.
+        
+        E.g., "Crocuses", "Spring crocuses", "Crocuses and spring" -> "crocuses"
+        """
+        if not topic:
+            return 'general'
+        
+        topic_lower = topic.lower().strip()
+        
+        # Check if it matches a category - use that as the normalized ID
+        for category, keywords in self.topic_categories.items():
+            for kw in keywords:
+                if kw in topic_lower:
+                    # Special case: if topic is primarily about one thing, use more specific
+                    # E.g., "cats Yo-Yo and Cinnamon" -> "pets" not something else
+                    return category
+        
+        # Extract main noun (first significant word that's not a common word)
+        common_words = {'the', 'a', 'an', 'and', 'or', 'with', 'about', 'for', 'to', 'of', 'in', 'on', 'at', 'by'}
+        words = re.findall(r'[a-z]+', topic_lower)
+        
+        for word in words:
+            if word not in common_words and len(word) > 2:
+                return word
+        
+        return self._make_theme_id(topic)
     
     def _make_theme_id(self, topic):
         """Create a safe theme ID from a topic"""
@@ -476,12 +565,16 @@ class FamilyDashboardGenerator:
         """
         Build DYNAMIC "In Their Words" section based on ACTUAL conversation topics.
         
-        NO MORE hardcoded themes like "Snowbird Lifestyle"!
-        Instead, themes are generated from what the person actually talks about.
+        Features:
+        - Uses real conversation topics (not hardcoded themes)
+        - Consolidates similar topics (e.g., "crocuses" + "spring flowers" → Nature)
+        - Filters out meta-topics (e.g., "introduction and purpose of calls")
+        - Generates appropriate icons
         """
-        # Collect quotes organized by their actual topics
-        topic_quotes = defaultdict(lambda: {
+        # Collect quotes organized by NORMALIZED theme IDs (for consolidation)
+        theme_data = defaultdict(lambda: {
             'quotes': [],
+            'original_topics': [],  # Track original topic names
             'icon': '💬',
             'first_mentioned': None,
             'last_mentioned': None
@@ -507,7 +600,17 @@ class FamilyDashboardGenerator:
             else:
                 conv_mood_emoji, conv_mood_label = '😌', 'Relaxed'
             
-            # Process quotes - use ACTUAL topics from this conversation
+            # Get primary topic for this conversation
+            primary_topic = None
+            if topics and len(topics) > 0:
+                primary_topic = topics[0] if isinstance(topics[0], str) else str(topics[0])
+                
+                # Skip meta topics
+                if self._is_meta_topic(primary_topic):
+                    meta_filtered_count += 1
+                    primary_topic = None
+            
+            # Process quotes
             for quote in conv_quotes:
                 if not quote or not isinstance(quote, str):
                     continue
@@ -523,16 +626,16 @@ class FamilyDashboardGenerator:
                 if len(quote_stripped.split()) < 5:
                     continue
                 
-                # Use the conversation's ACTUAL topics
-                if topics and len(topics) > 0:
-                    # Use first topic as the theme
-                    primary_topic = topics[0] if isinstance(topics[0], str) else str(topics[0])
-                    theme_id = self._make_theme_id(primary_topic)
-                    theme_name = self._format_theme_name(primary_topic)
-                    icon = self._get_theme_icon(primary_topic.lower())
+                # Determine theme using NORMALIZED ID (for consolidation)
+                if primary_topic:
+                    theme_id = self._normalize_theme_id(primary_topic)
+                    theme_data[theme_id]['original_topics'].append(primary_topic)
                 else:
                     # Fallback: try to detect from quote content
-                    theme_id, theme_name, icon = self._detect_theme(quote_stripped, topics, None)
+                    theme_id, _, _ = self._detect_theme(quote_stripped, topics, None)
+                
+                # Get icon for this theme
+                icon = self.theme_icons.get(theme_id, '💬')
                 
                 # Analyze quote-specific sentiment
                 quote_mood_emoji, quote_mood_label = self._analyze_quote_sentiment(
@@ -540,37 +643,36 @@ class FamilyDashboardGenerator:
                 )
                 
                 # Store with the theme
-                topic_quotes[theme_id]['theme_name'] = theme_name
-                topic_quotes[theme_id]['icon'] = icon
-                topic_quotes[theme_id]['quotes'].append({
+                theme_data[theme_id]['icon'] = icon
+                theme_data[theme_id]['quotes'].append({
                     'quote': quote_stripped,
                     'date': date_fmt,
                     'timestamp': timestamp,
                     'mood': quote_mood_label,
-                    'mood_emoji': quote_mood_emoji,
-                    'topics': topics  # Include original topics for context
+                    'mood_emoji': quote_mood_emoji
                 })
                 
                 # Update timestamps
-                if not topic_quotes[theme_id]['first_mentioned'] or timestamp < topic_quotes[theme_id]['first_mentioned']:
-                    topic_quotes[theme_id]['first_mentioned'] = timestamp
-                if not topic_quotes[theme_id]['last_mentioned'] or timestamp > topic_quotes[theme_id]['last_mentioned']:
-                    topic_quotes[theme_id]['last_mentioned'] = timestamp
+                if not theme_data[theme_id]['first_mentioned'] or timestamp < theme_data[theme_id]['first_mentioned']:
+                    theme_data[theme_id]['first_mentioned'] = timestamp
+                if not theme_data[theme_id]['last_mentioned'] or timestamp > theme_data[theme_id]['last_mentioned']:
+                    theme_data[theme_id]['last_mentioned'] = timestamp
         
-        # Build final themes list
+        # Build final themes list with NICE display names
         themes = []
-        for theme_id, data in topic_quotes.items():
+        for theme_id, data in theme_data.items():
             if not data['quotes']:
                 continue
             
-            theme_name = data.get('theme_name', theme_id.replace('_', ' ').title())
+            # Generate a nice theme display name
+            theme_name = self._generate_theme_display_name(theme_id, data['original_topics'])
             icon = data.get('icon', '💬')
             
             # Deduplicate quotes
             seen_quotes = set()
             unique_quotes = []
             for q in data['quotes']:
-                q_lower = q['quote'].lower().strip()
+                q_lower = q['quote'].lower().strip()[:50]  # First 50 chars for comparison
                 if q_lower not in seen_quotes:
                     seen_quotes.add(q_lower)
                     unique_quotes.append(q)
@@ -578,7 +680,7 @@ class FamilyDashboardGenerator:
             # Sort quotes by date (newest first)
             unique_quotes.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
             
-            # Simple context based on number of quotes
+            # Simple context
             context = f"{elder_name} has shared {len(unique_quotes)} memorable moments about {theme_name.lower()}."
             
             themes.append({
@@ -602,6 +704,38 @@ class FamilyDashboardGenerator:
             'total_themes': len(themes)
         }
     
+    def _generate_theme_display_name(self, theme_id, original_topics):
+        """Generate a nice display name for a theme based on its ID and original topics"""
+        
+        # If theme_id matches a known category, use a nice name
+        category_names = {
+            'family': 'Family',
+            'health': 'Health & Wellness',
+            'travel': 'Travel & Outings',
+            'home': 'Home & Daily Life',
+            'work': 'Work & Career',
+            'hobbies': 'Hobbies & Interests',
+            'friends': 'Friends & Social',
+            'memories': 'Memories',
+            'food': 'Food & Cooking',
+            'nature': 'Nature & Garden',
+            'pets': 'Pets',
+            'music': 'Music',
+            'books': 'Books & Entertainment',
+            'sports': 'Sports & Exercise',
+            'faith': 'Faith & Spirituality',
+            'weather': 'Weather',
+            'shopping': 'Shopping & Errands',
+        }
+        
+        if theme_id in category_names:
+            return category_names[theme_id]
+        
+        # Otherwise, try to create a nice name from the theme_id
+        if theme_id:
+            return theme_id.replace('_', ' ').title()
+        
+        return 'Life Stories'
     def _build_theme_context(self, theme_id, data, elder_name):
         """Build a simple narrative context for a theme"""
         # This method is kept for backward compatibility but simplified
