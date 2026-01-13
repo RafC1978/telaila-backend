@@ -691,18 +691,16 @@ class FamilyDashboardGenerator:
     
     def _build_in_their_words(self, conversations, elder_name):
         """
-        Build DYNAMIC "In Their Words" section based on ACTUAL conversation topics.
+        Build DYNAMIC "In Their Words" section.
         
-        Features:
-        - Uses real conversation topics (not hardcoded themes)
-        - Consolidates similar topics (e.g., "crocuses" + "spring flowers" → Nature)
-        - Filters out meta-topics (e.g., "introduction and purpose of calls")
-        - Generates appropriate icons
+        KEY FIX: Categorize each quote by its CONTENT, not just the conversation's topic.
+        This ensures a snowbird quote isn't labeled "health" just because the conversation
+        was primarily about health.
         """
-        # Collect quotes organized by NORMALIZED theme IDs (for consolidation)
+        # Collect quotes organized by theme
         theme_data = defaultdict(lambda: {
             'quotes': [],
-            'original_topics': [],  # Track original topic names
+            'original_topics': [],
             'icon': '💬',
             'first_mentioned': None,
             'last_mentioned': None
@@ -728,17 +726,7 @@ class FamilyDashboardGenerator:
             else:
                 conv_mood_emoji, conv_mood_label = '😌', 'Relaxed'
             
-            # Get primary topic for this conversation
-            primary_topic = None
-            if topics and len(topics) > 0:
-                primary_topic = topics[0] if isinstance(topics[0], str) else str(topics[0])
-                
-                # Skip meta topics
-                if self._is_meta_topic(primary_topic):
-                    meta_filtered_count += 1
-                    primary_topic = None
-            
-            # Process quotes
+            # Process each quote INDIVIDUALLY
             for quote in conv_quotes:
                 if not quote or not isinstance(quote, str):
                     continue
@@ -754,13 +742,22 @@ class FamilyDashboardGenerator:
                 if len(quote_stripped.split()) < 5:
                     continue
                 
-                # Determine theme using NORMALIZED ID (for consolidation)
-                if primary_topic:
-                    theme_id = self._normalize_theme_id(primary_topic)
-                    theme_data[theme_id]['original_topics'].append(primary_topic)
-                else:
-                    # Fallback: try to detect from quote content
-                    theme_id, _, _ = self._detect_theme(quote_stripped, topics, None)
+                # CATEGORIZE BY QUOTE CONTENT (not conversation topic)
+                theme_id = self._categorize_quote(quote_stripped, topics)
+                
+                # Skip meta themes
+                if theme_id in ['introduction', 'conversations', 'general']:
+                    # Try harder to find a real theme
+                    for topic in topics:
+                        if topic and not self._is_meta_topic(topic):
+                            alt_theme = self._normalize_theme_id(topic)
+                            if alt_theme not in ['introduction', 'conversations', 'general']:
+                                theme_id = alt_theme
+                                break
+                
+                # Still generic? Skip or use fallback
+                if theme_id == 'general':
+                    continue
                 
                 # Get icon for this theme
                 icon = self.theme_icons.get(theme_id, '💬')
@@ -780,22 +777,26 @@ class FamilyDashboardGenerator:
                     'mood_emoji': quote_mood_emoji
                 })
                 
+                # Track original topics
+                if topics:
+                    theme_data[theme_id]['original_topics'].extend(topics)
+                
                 # Update timestamps
                 if not theme_data[theme_id]['first_mentioned'] or timestamp < theme_data[theme_id]['first_mentioned']:
                     theme_data[theme_id]['first_mentioned'] = timestamp
                 if not theme_data[theme_id]['last_mentioned'] or timestamp > theme_data[theme_id]['last_mentioned']:
                     theme_data[theme_id]['last_mentioned'] = timestamp
         
-        # Build final themes list with NICE display names
+        # Build final themes list
         themes = []
         for theme_id, data in theme_data.items():
             if not data['quotes']:
                 continue
             
-            # Generate a nice theme display name
+            # Generate display name
             theme_name = self._generate_theme_display_name(theme_id, data['original_topics'])
             
-            # FINAL CHECK: Skip if theme name still looks like a meta topic
+            # FINAL CHECK: Skip meta themes
             if self._is_meta_topic(theme_name) or self._is_meta_topic(theme_id):
                 meta_filtered_count += 1
                 continue
@@ -806,7 +807,7 @@ class FamilyDashboardGenerator:
             seen_quotes = set()
             unique_quotes = []
             for q in data['quotes']:
-                q_lower = q['quote'].lower().strip()[:50]  # First 50 chars for comparison
+                q_lower = q['quote'].lower().strip()[:50]
                 if q_lower not in seen_quotes:
                     seen_quotes.add(q_lower)
                     unique_quotes.append(q)
@@ -821,15 +822,15 @@ class FamilyDashboardGenerator:
                 'theme_id': theme_id,
                 'theme_name': theme_name,
                 'icon': icon,
-                'priority': len(unique_quotes),  # More quotes = higher priority
+                'priority': len(unique_quotes),
                 'context': context,
-                'quotes': unique_quotes[:5],  # Top 5 quotes per theme
+                'quotes': unique_quotes[:5],
                 'total_quotes': len(unique_quotes),
                 'first_mentioned': self._format_date(data['first_mentioned']),
                 'last_updated': self._format_date(data['last_mentioned'])
             })
         
-        # Sort themes by number of quotes (most discussed first)
+        # Sort themes by number of quotes
         themes.sort(key=lambda x: x.get('total_quotes', 0), reverse=True)
         
         return {
@@ -838,6 +839,118 @@ class FamilyDashboardGenerator:
             'total_themes': len(themes)
         }
     
+    def _categorize_quote(self, quote, conversation_topics=None):
+        """
+        Categorize a quote based on its CONTENT.
+        
+        Priority:
+        1. Check quote text for specific keywords (snowbird, poker, RV, etc.)
+        2. Check quote text against category keywords (family, nature, etc.)
+        3. Fall back to conversation topic if quote has no clear category
+        4. Return 'general' if nothing matches
+        """
+        quote_lower = quote.lower()
+        
+        # PRIORITY 1: Specific meaningful topics from quote content
+        specific_keywords = {
+            # Snowbird/RV lifestyle
+            'snowbird': 'snowbird',
+            'snow bird': 'snowbird',
+            'rv life': 'rv_life',
+            'rv community': 'rv_life',
+            'rv park': 'rv_life',
+            'trailer park': 'rv_life',
+            'arizona': 'snowbird',
+            'winter in': 'snowbird',
+            
+            # Social activities
+            'poker': 'poker',
+            'card game': 'poker',
+            'dinner out': 'social_outings',
+            'went to dinner': 'social_outings',
+            'restaurant': 'social_outings',
+            'chinese food': 'social_outings',
+            'sushi': 'social_outings',
+            
+            # Family
+            'my son': 'family',
+            'my daughter': 'family',
+            'my wife': 'family',
+            'my husband': 'family',
+            'grandkid': 'family',
+            'grandchild': 'family',
+            
+            # Nature
+            'crocus': 'nature',
+            'flower': 'nature',
+            'garden': 'nature',
+            'spring': 'nature',
+            'bloom': 'nature',
+            
+            # Pets
+            'my cat': 'pets',
+            'my dog': 'pets',
+            'the cat': 'pets',
+            'the dog': 'pets',
+            
+            # Health (only if explicitly about health, not just mentions)
+            'fell off': 'health_recovery',
+            'back injury': 'health_recovery',
+            'back pain': 'health_recovery',
+            'bruised': 'health_recovery',
+            'hurt when': 'health_recovery',
+            'getting better': 'health_recovery',
+            'little bit better': 'health_recovery',
+            'recovery': 'health_recovery',
+            'fell and': 'health_recovery',
+            'fall and': 'health_recovery',
+            'hit the concrete': 'health_recovery',
+            'muscles': 'health_recovery',
+            'doctor': 'health',
+            'hospital': 'health',
+            
+            # Books/Entertainment
+            'book': 'books',
+            'reading': 'books',
+            'tv show': 'books',
+            'watching': 'books',
+            
+            # Friends
+            'my friend': 'friends',
+            'old friend': 'friends',
+            'friendship': 'friends',
+        }
+        
+        for keyword, theme_id in specific_keywords.items():
+            if keyword in quote_lower:
+                return theme_id
+        
+        # PRIORITY 2: Check category keywords
+        for category, keywords in self.topic_categories.items():
+            # Skip blocked categories for this quote
+            blocker_info = self.category_blockers.get(category, {})
+            blockers = blocker_info.get('blockers', []) if isinstance(blocker_info, dict) else []
+            
+            blocked = False
+            for blocker in blockers:
+                if blocker in quote_lower:
+                    blocked = True
+                    break
+            
+            if blocked:
+                continue
+            
+            for kw in keywords:
+                if kw in quote_lower:
+                    return category
+        
+        # PRIORITY 3: Fall back to conversation topic
+        if conversation_topics:
+            for topic in conversation_topics:
+                if topic and not self._is_meta_topic(topic):
+                    return self._normalize_theme_id(topic)
+        
+        return 'general'
     def _generate_theme_display_name(self, theme_id, original_topics):
         """Generate a nice display name for a theme based on its ID and original topics"""
         
