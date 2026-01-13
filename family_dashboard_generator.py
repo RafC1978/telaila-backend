@@ -515,11 +515,6 @@ class FamilyDashboardGenerator:
             'completeness_estimate': life_story['progress']['percentage'],
             'next_areas_to_explore': life_story['progress']['next_areas']
         }
-            'knowledge_base_sections': kb_sections,
-            'knowledge_base_words': kb_words,
-            'completeness_estimate': min(100, (total_stories * 2) + (kb_sections * 0.5)),  # More realistic: ~50 stories = 100%
-            'next_areas_to_explore': self._suggest_biography_areas(conversations)
-        }
     
     def _suggest_biography_areas(self, conversations):
         """Suggest areas of life story not yet explored"""
