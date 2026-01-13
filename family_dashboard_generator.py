@@ -110,10 +110,10 @@ class FamilyDashboardGenerator:
             },
             'generated_at': datetime.now().isoformat(),
             'summary': self._generate_summary(conversations, tester),
-            'health_insights': self._generate_health_insights(conversations),
+            'biography_progress': self._analyze_biography_progress(knowledge_base, conversations),  # MOVED UP - Priority #1
+            'life_story_quotes': self._extract_biographical_quotes(conversations),  # NEW - filtered quotes
             'recent_conversations': self._generate_recent_conversations(conversations),
-            'memorable_quotes': self._extract_memorable_quotes(conversations),
-            'biography_progress': self._analyze_biography_progress(knowledge_base, conversations),
+            'health_insights': self._generate_health_insights(conversations),
             'alerts': self._identify_alerts(conversations),
             'trends': self._generate_trends(conversations),
             'recommendations': self._generate_recommendations(conversations, tester),
@@ -293,61 +293,228 @@ class FamilyDashboardGenerator:
         
         return summaries
     
-    def _extract_memorable_quotes(self, conversations):
-        """Extract best quotes from all conversations"""
-        all_quotes = []
+    def _extract_biographical_quotes(self, conversations):
+        """
+        Extract quotes specifically about their life and stories
+        Filter out meta-conversations, technical issues, AI discussions
+        """
+        biographical_quotes = []
+        
+        # Keywords that indicate NON-biographical quotes
+        meta_keywords = [
+            'ai', 'aila', 'sleep', 'you', 'conversation', 'talking', 
+            'understand', 'feel', 'experience', 'artificial', 'human',
+            'call', 'chat', 'speaking'
+        ]
         
         for conv in conversations:
             analysis = conv.get('analysis', {})
             quotes = analysis.get('conversation', {}).get('memorable_quotes', [])
+            topics = analysis.get('conversation', {}).get('topics', [])
+            bio = analysis.get('biography', {})
+            stories = bio.get('stories', [])
+            
+            # Convert timestamp to PST
+            if 'timestamp' in conv:
+                local_time = self._to_local_time(conv['timestamp'])
+                date_str = local_time.strftime('%B %d, %Y')
+            else:
+                date_str = 'Unknown'
             
             for quote in quotes:
-                # Convert timestamp to PST
-                if 'timestamp' in conv:
-                    local_time = self._to_local_time(conv['timestamp'])
-                    date_str = local_time.strftime('%B %d, %Y')
-                else:
-                    date_str = 'Unknown'
+                quote_lower = quote.lower()
                 
-                all_quotes.append({
+                # Skip if it's meta-conversation
+                if any(keyword in quote_lower for keyword in meta_keywords):
+                    continue
+                
+                # Skip if it's too short (likely just "yes" or "okay")
+                if len(quote.split()) < 4:
+                    continue
+                
+                # Try to find context from stories
+                story_context = None
+                for story in stories:
+                    if any(word in quote_lower for word in story.get('topic', '').lower().split()):
+                        story_context = story.get('topic')
+                        break
+                
+                biographical_quotes.append({
                     'quote': quote,
                     'date': date_str,
-                    'context': 'From conversation'  # Could be enhanced
+                    'context': story_context or (topics[0] if topics else 'From their life'),
+                    'topics': topics
                 })
         
-        # Return last 5 quotes
-        return all_quotes[-5:] if len(all_quotes) > 5 else all_quotes
+        # Return last 8 quotes (more than before to show richness)
+        return biographical_quotes[-8:] if len(biographical_quotes) > 8 else biographical_quotes
     
-    def _analyze_biography_progress(self, knowledge_base, conversations):
-        """Analyze how much of life story has been captured"""
+    def _build_life_story_profile(self, conversations):
+        """
+        Build comprehensive life story profile showing what we're learning
+        This is the HERO section of the dashboard
+        """
         
-        # Count stories from analysis
-        total_stories = 0
-        story_categories = defaultdict(int)
+        profile = {
+            'places': [],
+            'people': [],
+            'work_career': [],
+            'interests_hobbies': [],
+            'life_events': [],
+            'stories': [],
+            'chapters_captured': set()
+        }
         
         for conv in conversations:
             analysis = conv.get('analysis', {})
             bio = analysis.get('biography', {})
             
+            # Extract stories with rich detail
             stories = bio.get('stories', [])
-            total_stories += len(stories)
+            for story in stories:
+                topic = story.get('topic', '')
+                details = story.get('details', '')
+                people_involved = story.get('people_involved', [])
+                
+                # Categorize the story
+                topic_lower = topic.lower()
+                
+                # Add to appropriate category
+                if any(word in topic_lower for word in ['live', 'lived', 'home', 'house', 'city', 'town', 'country', 'place']):
+                    if details:
+                        profile['places'].append({
+                            'detail': details,
+                            'date_captured': conv.get('timestamp', '')
+                        })
+                        profile['chapters_captured'].add('Places & Locations')
+                
+                if any(word in topic_lower for word in ['work', 'job', 'career', 'business', 'profession']):
+                    if details:
+                        profile['work_career'].append({
+                            'detail': details,
+                            'date_captured': conv.get('timestamp', '')
+                        })
+                        profile['chapters_captured'].add('Work & Career')
+                
+                if any(word in topic_lower for word in ['hobby', 'interest', 'love', 'enjoy', 'passion', 'favorite']):
+                    if details:
+                        profile['interests_hobbies'].append({
+                            'detail': details,
+                            'date_captured': conv.get('timestamp', '')
+                        })
+                        profile['chapters_captured'].add('Interests & Hobbies')
+                
+                # All stories get added regardless
+                profile['stories'].append({
+                    'topic': topic,
+                    'details': details,
+                    'people': people_involved,
+                    'date_captured': conv.get('timestamp', '')
+                })
             
-            # Categorize stories
+            # Extract people mentioned
             people = bio.get('people', [])
-            if people:
-                story_categories['people_mentioned'] += len(people)
+            for person in people:
+                if isinstance(person, dict):
+                    name = person.get('name', '')
+                    relationship = person.get('relationship', '')
+                    if name:
+                        profile['people'].append({
+                            'name': name,
+                            'relationship': relationship,
+                            'date_captured': conv.get('timestamp', '')
+                        })
+                elif isinstance(person, str) and person:
+                    profile['people'].append({
+                        'name': person,
+                        'relationship': 'mentioned',
+                        'date_captured': conv.get('timestamp', '')
+                    })
             
+            if profile['people']:
+                profile['chapters_captured'].add('Important People')
+            
+            # Extract timeline events
             timeline_events = bio.get('timeline_events', [])
-            if timeline_events:
-                story_categories['timeline_events'] += len(timeline_events)
+            for event in timeline_events:
+                profile['life_events'].append({
+                    'event': event,
+                    'date_captured': conv.get('timestamp', '')
+                })
+            
+            if profile['life_events']:
+                profile['chapters_captured'].add('Life Events')
+        
+        # Deduplicate people by name
+        seen_names = set()
+        unique_people = []
+        for person in profile['people']:
+            name = person.get('name', '').lower()
+            if name and name not in seen_names:
+                seen_names.add(name)
+                unique_people.append(person)
+        profile['people'] = unique_people
+        
+        # Convert chapters set to list
+        profile['chapters_captured'] = sorted(list(profile['chapters_captured']))
+        
+        # Calculate meaningful progress
+        total_chapters = 8  # Places, People, Work, Hobbies, Childhood, Family, Travel, Life Events
+        chapters_with_content = len(profile['chapters_captured'])
+        
+        profile['progress'] = {
+            'chapters_captured': chapters_with_content,
+            'total_chapters': total_chapters,
+            'percentage': int((chapters_with_content / total_chapters) * 100),
+            'next_areas': self._suggest_biography_areas_v2(profile)
+        }
+        
+        return profile
+    
+    def _suggest_biography_areas_v2(self, profile):
+        """Suggest which chapters of their life to explore next"""
+        
+        all_chapters = {
+            'Places & Locations': 'Where have you lived? Where have you traveled?',
+            'Important People': 'Family, friends, mentors who shaped your life',
+            'Work & Career': 'What did you do for work? What did you enjoy about it?',
+            'Interests & Hobbies': 'What do you love doing? What are you passionate about?',
+            'Childhood': 'Growing up, early memories, school days',
+            'Family': 'Parents, siblings, children, spouse',
+            'Travel & Adventures': 'Places visited, favorite trips, adventures',
+            'Life Events': 'Marriages, moves, achievements, challenges'
+        }
+        
+        captured = set(profile['chapters_captured'])
+        missing = []
+        
+        for chapter, description in all_chapters.items():
+            if chapter not in captured:
+                missing.append({
+                    'chapter': chapter,
+                    'description': description
+                })
+        
+        return missing[:3]  # Suggest top 3 areas to explore
+    
+    def _analyze_biography_progress(self, knowledge_base, conversations):
+        """Analyze how much of life story has been captured"""
+        
+        # Build the rich life story profile
+        life_story = self._build_life_story_profile(conversations)
         
         # Analyze knowledge base for depth
         kb_sections = knowledge_base.count('###') if knowledge_base else 0
         kb_words = len(knowledge_base.split()) if knowledge_base else 0
         
         return {
-            'total_stories_captured': total_stories,
-            'categories': dict(story_categories),
+            'total_stories_captured': len(life_story['stories']),
+            'life_story_profile': life_story,
+            'knowledge_base_sections': kb_sections,
+            'knowledge_base_words': kb_words,
+            'completeness_estimate': life_story['progress']['percentage'],
+            'next_areas_to_explore': life_story['progress']['next_areas']
+        }
             'knowledge_base_sections': kb_sections,
             'knowledge_base_words': kb_words,
             'completeness_estimate': min(100, (total_stories * 2) + (kb_sections * 0.5)),  # More realistic: ~50 stories = 100%
