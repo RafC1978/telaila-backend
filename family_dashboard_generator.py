@@ -660,16 +660,18 @@ class FamilyDashboardGenerator:
                 'relationship': tester['signup_data'].get('relationship', 'family member'),
             },
             'generated_at': datetime.now().isoformat(),
+            
+            # === THREE MAIN SECTIONS (matching demo tabs) ===
+            'weekly_updates': self._generate_weekly_updates(conversations, elder_name),
+            'health_insights': self._generate_health_insights_v2(conversations, health_events, elder_name),
+            'life_story': self._generate_life_story(conversations, knowledge_base, elder_name),
+            
+            # === LEGACY (keep for backward compatibility) ===
             'summary': self._generate_summary(conversations, tester, health_events),
             'health_events': health_events,
-            'in_their_words': self._build_in_their_words(conversations, elder_name),  # NEW
+            'in_their_words': self._build_in_their_words(conversations, elder_name),
             'biography_progress': self._analyze_biography_progress(knowledge_base, conversations),
-            'life_story_quotes': self._extract_biographical_quotes(conversations),  # KEEP for backward compat
-            'recent_conversations': self._generate_recent_conversations(conversations),
-            'health_insights': self._generate_health_insights(conversations, health_events),
             'alerts': self._identify_alerts(conversations, health_events),
-            'trends': self._generate_trends(conversations),
-            'recommendations': self._generate_recommendations(conversations, tester, health_events),
         }
         
         return dashboard
@@ -1615,7 +1617,828 @@ class FamilyDashboardGenerator:
             'status': 'active' if days_since and days_since < 7 else 'inactive'
         }
     
-    def _generate_health_insights(self, conversations, health_events=None):
+    def _generate_weekly_updates(self, conversations, elder_name):
+        """
+        Generate Weekly Updates section matching the demo format:
+        - Conversations This Week (count + days)
+        - Overall Mood (with emoji and description)
+        - Engagement (level and description)
+        - Latest Conversation Summary (narrative + key moments)
+        - This Week's Highlights (day-by-day)
+        """
+        now = datetime.now(self.local_tz)
+        week_start = now - timedelta(days=7)
+        
+        # Filter to this week's conversations
+        week_convs = []
+        for conv in conversations:
+            ts = conv.get('timestamp', '')
+            if ts:
+                conv_time = self._to_local_time(ts)
+                if conv_time and conv_time >= week_start:
+                    week_convs.append(conv)
+        
+        # Handle no conversations this week
+        if not week_convs:
+            # Use last few conversations instead
+            week_convs = conversations[-3:] if len(conversations) >= 3 else conversations
+            period_label = "Recent"
+        else:
+            period_label = "This Week"
+        
+        if not week_convs:
+            return self._empty_weekly_updates(elder_name)
+        
+        # 1. CONVERSATIONS COUNT & DAYS
+        conv_count = len(week_convs)
+        conv_days = []
+        for conv in week_convs:
+            ts = conv.get('timestamp', '')
+            if ts:
+                conv_time = self._to_local_time(ts)
+                if conv_time:
+                    day_name = conv_time.strftime('%A')
+                    if day_name not in conv_days:
+                        conv_days.append(day_name)
+        
+        conversations_this_week = {
+            'count': conv_count,
+            'count_label': f"{conv_count} call{'s' if conv_count != 1 else ''}",
+            'days': conv_days,
+            'days_label': ', '.join(conv_days) if conv_days else 'Various days',
+            'period': period_label
+        }
+        
+        # 2. OVERALL MOOD
+        mood_scores = []
+        mood_labels = []
+        for conv in week_convs:
+            mood = conv.get('analysis', {}).get('conversation', {}).get('mood', 'neutral')
+            mood_lower = str(mood).lower()
+            if any(w in mood_lower for w in ['positive', 'happy', 'good', 'cheerful', 'great']):
+                mood_scores.append(3)
+                mood_labels.append('positive')
+            elif any(w in mood_lower for w in ['negative', 'sad', 'upset', 'anxious', 'worried']):
+                mood_scores.append(1)
+                mood_labels.append('negative')
+            else:
+                mood_scores.append(2)
+                mood_labels.append('neutral')
+        
+        avg_mood = sum(mood_scores) / len(mood_scores) if mood_scores else 2
+        
+        # Determine consistency
+        unique_moods = set(mood_labels)
+        if len(unique_moods) == 1:
+            consistency = "Consistent all week"
+        elif len(unique_moods) == 2 and 'negative' not in unique_moods:
+            consistency = "Generally positive"
+        elif 'negative' in unique_moods and mood_labels[-1] == 'negative':
+            consistency = "Declining recently"
+        else:
+            consistency = "Varies"
+        
+        if avg_mood >= 2.5:
+            overall_mood = {
+                'value': 'Positive',
+                'emoji': '✨',
+                'description': consistency,
+                'score': avg_mood
+            }
+        elif avg_mood >= 1.5:
+            overall_mood = {
+                'value': 'Neutral',
+                'emoji': '😊',
+                'description': consistency,
+                'score': avg_mood
+            }
+        else:
+            overall_mood = {
+                'value': 'Low',
+                'emoji': '😔',
+                'description': consistency,
+                'score': avg_mood
+            }
+        
+        # 3. ENGAGEMENT
+        eng_scores = []
+        for conv in week_convs:
+            eng = conv.get('analysis', {}).get('conversation', {}).get('engagement', 'moderate')
+            eng_lower = str(eng).lower()
+            if 'high' in eng_lower:
+                eng_scores.append(3)
+            elif 'low' in eng_lower:
+                eng_scores.append(1)
+            else:
+                eng_scores.append(2)
+        
+        avg_eng = sum(eng_scores) / len(eng_scores) if eng_scores else 2
+        
+        # Generate engagement description based on conversation content
+        has_stories = any(
+            conv.get('analysis', {}).get('biography', {}).get('stories', [])
+            for conv in week_convs
+        )
+        has_quotes = any(
+            conv.get('analysis', {}).get('conversation', {}).get('memorable_quotes', [])
+            for conv in week_convs
+        )
+        
+        if avg_eng >= 2.5:
+            if has_stories:
+                eng_desc = "Sharing stories actively"
+            elif has_quotes:
+                eng_desc = "Opening up in conversations"
+            else:
+                eng_desc = "Very engaged"
+            engagement = {'value': 'High', 'description': eng_desc, 'score': avg_eng}
+        elif avg_eng >= 1.5:
+            engagement = {'value': 'Moderate', 'description': "Participating regularly", 'score': avg_eng}
+        else:
+            engagement = {'value': 'Low', 'description': "Brief conversations", 'score': avg_eng}
+        
+        # 4. LATEST CONVERSATION SUMMARY
+        latest_conv = week_convs[-1]
+        latest_summary = self._generate_latest_conversation_summary(latest_conv, elder_name)
+        
+        # 5. THIS WEEK'S HIGHLIGHTS
+        highlights = self._generate_weekly_highlights(week_convs, elder_name)
+        
+        return {
+            'conversations_this_week': conversations_this_week,
+            'overall_mood': overall_mood,
+            'engagement': engagement,
+            'latest_conversation': latest_summary,
+            'highlights': highlights,
+            'period': period_label
+        }
+    
+    def _empty_weekly_updates(self, elder_name):
+        """Return empty weekly updates for users with no conversations"""
+        return {
+            'conversations_this_week': {
+                'count': 0,
+                'count_label': 'No calls yet',
+                'days': [],
+                'days_label': '',
+                'period': 'This Week'
+            },
+            'overall_mood': {
+                'value': 'Unknown',
+                'emoji': '❓',
+                'description': 'No conversations yet',
+                'score': 0
+            },
+            'engagement': {
+                'value': 'Unknown',
+                'description': f'Waiting for {elder_name} to make their first call',
+                'score': 0
+            },
+            'latest_conversation': None,
+            'highlights': [],
+            'period': 'This Week'
+        }
+    
+    def _generate_latest_conversation_summary(self, conv, elder_name):
+        """
+        Generate a rich narrative summary of the latest conversation.
+        
+        Matches demo format:
+        - Date and time
+        - Duration
+        - Narrative description
+        - Key moments (bullet list)
+        - Topics loved
+        - Mood at start/end
+        """
+        analysis = conv.get('analysis', {})
+        conv_data = analysis.get('conversation', {})
+        bio_data = analysis.get('biography', {})
+        health_data = analysis.get('health', {})
+        
+        # Date and time
+        ts = conv.get('timestamp', '')
+        if ts:
+            conv_time = self._to_local_time(ts)
+            date_formatted = conv_time.strftime('%A, %B %d, %Y at %I:%M %p') if conv_time else 'Unknown'
+        else:
+            date_formatted = 'Unknown'
+        
+        # Duration
+        duration = self._calculate_duration(conv.get('transcript', ''))
+        
+        # Topics
+        topics = conv_data.get('topics', [])
+        mood = conv_data.get('mood', 'neutral')
+        engagement = conv_data.get('engagement', 'moderate')
+        quotes = conv_data.get('memorable_quotes', [])
+        stories = bio_data.get('stories', [])
+        
+        # Generate narrative
+        narrative = self._generate_conversation_narrative(
+            elder_name, mood, engagement, topics, stories, quotes, health_data
+        )
+        
+        # Key moments (from stories, quotes, and topics)
+        key_moments = []
+        
+        # Add story-based moments
+        for story in stories[:2]:
+            if isinstance(story, dict):
+                topic = story.get('topic', '')
+                details = story.get('details', '')
+                if topic:
+                    key_moments.append(f"Shared about {topic.lower()}")
+                elif details:
+                    key_moments.append(f"Talked about {details[:50]}...")
+        
+        # Add topic-based moments
+        for topic in topics[:3]:
+            if topic and not any(topic.lower() in km.lower() for km in key_moments):
+                key_moments.append(f"Discussed {topic}")
+        
+        # Health notes
+        if health_data.get('red_flags'):
+            key_moments.append("Mentioned some health concerns")
+        
+        # Limit to 5 key moments
+        key_moments = key_moments[:5]
+        
+        # Topics loved
+        topics_loved = [t for t in topics if t and not self._is_meta_topic(t)][:5]
+        
+        # Mood analysis
+        mood_lower = str(mood).lower()
+        if any(w in mood_lower for w in ['positive', 'happy', 'good']):
+            mood_emoji = '😊'
+            mood_label = 'Positive'
+        elif any(w in mood_lower for w in ['negative', 'sad', 'upset']):
+            mood_emoji = '😔'
+            mood_label = 'Reflective'
+        else:
+            mood_emoji = '😌'
+            mood_label = 'Relaxed'
+        
+        return {
+            'date': date_formatted,
+            'duration': duration,
+            'duration_label': f"{duration} minutes" if duration else "Brief call",
+            'narrative': narrative,
+            'key_moments': key_moments,
+            'topics_loved': topics_loved,
+            'topics_loved_label': ', '.join(topics_loved) if topics_loved else 'General conversation',
+            'mood': mood_label,
+            'mood_emoji': mood_emoji,
+            'engagement': engagement.title() if isinstance(engagement, str) else 'Moderate'
+        }
+    
+    def _generate_conversation_narrative(self, elder_name, mood, engagement, topics, stories, quotes, health_data):
+        """Generate a natural-language narrative summary of a conversation"""
+        parts = []
+        
+        # Opening based on mood
+        mood_lower = str(mood).lower()
+        if any(w in mood_lower for w in ['positive', 'happy', 'good', 'great']):
+            parts.append(f"{elder_name} had a wonderful conversation today!")
+        elif any(w in mood_lower for w in ['negative', 'sad', 'low']):
+            parts.append(f"{elder_name} had a quieter conversation today.")
+        else:
+            parts.append(f"{elder_name} had a nice chat today.")
+        
+        # Main content based on stories/topics
+        if stories:
+            story = stories[0]
+            if isinstance(story, dict):
+                topic = story.get('topic', '')
+                details = story.get('details', '')
+                if topic:
+                    parts.append(f"They shared a story about {topic.lower()}.")
+                elif details and len(details) > 20:
+                    parts.append(f"They shared memories about {details[:60]}...")
+        elif topics:
+            main_topics = [t for t in topics[:2] if t and not self._is_meta_topic(t)]
+            if main_topics:
+                parts.append(f"They talked about {' and '.join(main_topics).lower()}.")
+        
+        # Health note if relevant
+        if health_data.get('red_flags'):
+            parts.append("They also mentioned some health concerns worth noting.")
+        elif health_data.get('summary'):
+            summary = health_data['summary']
+            if 'better' in summary.lower() or 'improving' in summary.lower():
+                parts.append("They mentioned feeling better recently.")
+        
+        return ' '.join(parts)
+    
+    def _generate_weekly_highlights(self, conversations, elder_name):
+        """
+        Generate day-by-day highlights for the week.
+        
+        Format per highlight:
+        - Day and date
+        - Mood indicator
+        - Duration
+        - Brief description
+        """
+        highlights = []
+        
+        for conv in reversed(conversations):  # Most recent first
+            ts = conv.get('timestamp', '')
+            analysis = conv.get('analysis', {})
+            conv_data = analysis.get('conversation', {})
+            
+            # Date
+            if ts:
+                conv_time = self._to_local_time(ts)
+                day_date = conv_time.strftime('%A, %B %d') if conv_time else 'Unknown'
+            else:
+                day_date = 'Unknown'
+            
+            # Mood
+            mood = conv_data.get('mood', 'neutral')
+            mood_lower = str(mood).lower()
+            if any(w in mood_lower for w in ['positive', 'happy', 'good']):
+                mood_label = 'Positive'
+                mood_emoji = '😊'
+            elif any(w in mood_lower for w in ['negative', 'sad', 'upset']):
+                mood_label = 'Reflective'
+                mood_emoji = '😔'
+            else:
+                mood_label = 'Neutral'
+                mood_emoji = '😌'
+            
+            # Duration
+            duration = self._calculate_duration(conv.get('transcript', ''))
+            
+            # Brief description based on topics
+            topics = conv_data.get('topics', [])
+            stories = analysis.get('biography', {}).get('stories', [])
+            
+            if stories and isinstance(stories[0], dict):
+                topic = stories[0].get('topic', '')
+                if topic:
+                    description = f"Shared stories about {topic.lower()}."
+                else:
+                    description = "Shared personal memories."
+            elif topics:
+                clean_topics = [t for t in topics[:2] if t and not self._is_meta_topic(t)]
+                if clean_topics:
+                    description = f"Discussed {' and '.join(clean_topics).lower()}."
+                else:
+                    description = "Had a nice conversation."
+            else:
+                description = "Had a pleasant chat."
+            
+            highlights.append({
+                'day_date': day_date,
+                'mood': mood_label,
+                'mood_emoji': mood_emoji,
+                'duration': duration,
+                'duration_label': f"{duration} min" if duration else "Brief",
+                'description': description
+            })
+        
+        return highlights[:7]  # Max 7 highlights
+    
+    # =========================================================================
+    # HEALTH INSIGHTS (v2 - matching demo format)
+    # =========================================================================
+    
+    def _generate_health_insights_v2(self, conversations, health_events, elder_name):
+        """
+        Generate health insights matching the demo component structure.
+        
+        Returns:
+        {
+            alert: { title, message, date, time, severity },
+            wellbeing_timeline: [{ date, wellbeing, event? }],
+            health_timeline: [{ date_range, status, details, badge, badge_type }],
+            habits: [{ label, icon, frequency, active }]
+        }
+        """
+        now = datetime.now(self.local_tz)
+        two_weeks_ago = now - timedelta(days=14)
+        
+        # 1. BUILD WELLBEING TIMELINE (last 2 weeks)
+        wellbeing_timeline = []
+        daily_scores = {}
+        daily_events = {}
+        
+        for conv in conversations:
+            ts = conv.get('timestamp', '')
+            if not ts:
+                continue
+                
+            conv_time = self._to_local_time(ts)
+            if not conv_time or conv_time < two_weeks_ago:
+                continue
+            
+            date_key = conv_time.strftime('%b %d')
+            
+            # Calculate wellbeing score from mood and health
+            analysis = conv.get('analysis', {})
+            mood = analysis.get('conversation', {}).get('mood', 'neutral')
+            health = analysis.get('health', {})
+            
+            # Base score from mood
+            mood_lower = str(mood).lower()
+            if any(w in mood_lower for w in ['positive', 'happy', 'good', 'great']):
+                base_score = 90
+            elif any(w in mood_lower for w in ['negative', 'sad', 'low', 'tired']):
+                base_score = 70
+            else:
+                base_score = 82
+            
+            # Adjust for health concerns
+            if health.get('red_flags'):
+                base_score -= 10
+            if health.get('summary'):
+                summary_lower = health['summary'].lower()
+                if any(w in summary_lower for w in ['not feeling well', 'tired', 'pain', 'hurt']):
+                    base_score -= 8
+                if any(w in summary_lower for w in ['better', 'improving', 'good']):
+                    base_score += 5
+            
+            base_score = max(60, min(100, base_score))  # Clamp 60-100
+            daily_scores[date_key] = base_score
+            
+            # Track events
+            if health.get('red_flags'):
+                flags = health['red_flags']
+                if flags:
+                    flag_text = flags[0] if isinstance(flags[0], str) else str(flags[0])
+                    daily_events[date_key] = flag_text[:30]
+            elif health.get('summary'):
+                summary = health['summary']
+                if any(w in summary.lower() for w in ['cough', 'cold', 'sick', 'pain', 'fell', 'tired']):
+                    # Extract key phrase
+                    for phrase in ['cough', 'cold', 'not feeling well', 'tired', 'pain', 'fell']:
+                        if phrase in summary.lower():
+                            daily_events[date_key] = phrase.title()
+                            break
+        
+        # Convert to sorted list
+        for date_key in sorted(daily_scores.keys()):
+            entry = {
+                'date': date_key,
+                'wellbeing': daily_scores[date_key]
+            }
+            if date_key in daily_events:
+                entry['event'] = daily_events[date_key]
+            wellbeing_timeline.append(entry)
+        
+        # If no data, generate placeholder
+        if not wellbeing_timeline:
+            for i in range(7):
+                day = now - timedelta(days=6-i)
+                wellbeing_timeline.append({
+                    'date': day.strftime('%b %d'),
+                    'wellbeing': 85
+                })
+        
+        # 2. BUILD ALERT (from most recent health concern)
+        alert = None
+        if health_events:
+            active_events = [e for e in health_events if e.get('status') == 'active']
+            if active_events:
+                latest = active_events[-1]
+                alert = {
+                    'title': 'Health Note',
+                    'message': f"{elder_name} {latest.get('description', 'mentioned a health concern')}",
+                    'date': latest.get('detected_on_formatted', 'Recently'),
+                    'time': '',
+                    'severity': 'warning' if latest.get('severity') == 'high' else 'info'
+                }
+        
+        # Check recent conversations for health mentions
+        if not alert and conversations:
+            for conv in reversed(conversations[-3:]):
+                health = conv.get('analysis', {}).get('health', {})
+                if health.get('red_flags'):
+                    ts = conv.get('timestamp', '')
+                    conv_time = self._to_local_time(ts) if ts else None
+                    alert = {
+                        'title': 'Minor Health Note',
+                        'message': f"{elder_name} mentioned some health concerns in recent conversation.",
+                        'date': conv_time.strftime('%b %d') if conv_time else 'Recently',
+                        'time': conv_time.strftime('%I:%M %p') if conv_time else '',
+                        'severity': 'info'
+                    }
+                    break
+        
+        # 3. BUILD HEALTH TIMELINE (recent health-related events)
+        health_timeline = []
+        health_periods = self._group_health_by_period(conversations)
+        
+        for period in health_periods[-3:]:  # Last 3 periods
+            badge_type = 'success'
+            if period['trend'] == 'declining':
+                badge_type = 'danger'
+                badge = 'Needs attention'
+            elif period['trend'] == 'improving':
+                badge_type = 'success'
+                badge = 'Improving'
+            else:
+                badge_type = 'warning'
+                badge = 'Monitoring'
+            
+            health_timeline.append({
+                'date_range': period['date_range'],
+                'status': period['status'],
+                'details': period['details'],
+                'badge': badge,
+                'badge_type': badge_type
+            })
+        
+        # If no health timeline, show positive default
+        if not health_timeline:
+            health_timeline.append({
+                'date_range': 'This week',
+                'status': 'Generally well',
+                'details': f'{elder_name} has been in good spirits during conversations.',
+                'badge': 'Good',
+                'badge_type': 'success'
+            })
+        
+        # 4. BUILD HABITS (extract from conversations)
+        habits = self._extract_habits(conversations)
+        
+        return {
+            'alert': alert,
+            'wellbeing_timeline': wellbeing_timeline,
+            'health_timeline': health_timeline,
+            'habits': habits
+        }
+    
+    def _group_health_by_period(self, conversations):
+        """Group health mentions into time periods"""
+        periods = []
+        
+        # Simple grouping: look at last few conversations
+        recent = conversations[-5:] if len(conversations) >= 5 else conversations
+        
+        current_period = {
+            'date_range': '',
+            'status': '',
+            'details': '',
+            'trend': 'stable'
+        }
+        
+        health_notes = []
+        dates = []
+        
+        for conv in recent:
+            ts = conv.get('timestamp', '')
+            health = conv.get('analysis', {}).get('health', {})
+            
+            if ts:
+                conv_time = self._to_local_time(ts)
+                if conv_time:
+                    dates.append(conv_time)
+            
+            if health.get('summary'):
+                health_notes.append(health['summary'])
+            
+            for flag in health.get('red_flags', []):
+                if isinstance(flag, str):
+                    health_notes.append(flag)
+        
+        if dates and health_notes:
+            start_date = min(dates).strftime('%B %d')
+            end_date = max(dates).strftime('%d')
+            
+            # Determine trend from notes
+            trend = 'stable'
+            combined = ' '.join(health_notes).lower()
+            if 'better' in combined or 'improving' in combined:
+                trend = 'improving'
+            elif 'worse' in combined or 'not feeling well' in combined:
+                trend = 'declining'
+            
+            periods.append({
+                'date_range': f"{start_date}-{end_date}",
+                'status': health_notes[0][:50] if health_notes else 'General wellness',
+                'details': ' '.join(health_notes[:2])[:150],
+                'trend': trend
+            })
+        
+        return periods
+    
+    def _extract_habits(self, conversations):
+        """Extract habits and routines mentioned in conversations"""
+        habit_mentions = defaultdict(int)
+        
+        habit_keywords = {
+            'tea': ('Herbal tea routine', 'coffee', 'Daily'),
+            'walk': ('Daily walks', 'heart', 'Regular'),
+            'tv': ('Watching shows', 'tv', 'Entertainment'),
+            'read': ('Reading', 'book-open', 'Regular'),
+            'family': ('Family time', 'users', 'Social'),
+            'friend': ('Social connections', 'users', 'Social'),
+            'garden': ('Gardening', 'flower', 'Hobby'),
+            'cook': ('Cooking', 'utensils', 'Daily'),
+            'church': ('Faith activities', 'heart', 'Regular'),
+            'exercise': ('Exercise routine', 'activity', 'Regular'),
+        }
+        
+        for conv in conversations:
+            transcript = conv.get('transcript', '').lower()
+            for keyword, habit_info in habit_keywords.items():
+                if keyword in transcript:
+                    habit_mentions[keyword] += 1
+        
+        # Build habits list from most mentioned
+        habits = []
+        for keyword, count in sorted(habit_mentions.items(), key=lambda x: -x[1])[:4]:
+            if count >= 1:
+                label, icon, frequency = habit_keywords[keyword]
+                habits.append({
+                    'label': label,
+                    'icon': icon,
+                    'frequency': frequency,
+                    'active': True
+                })
+        
+        # Default habits if none found
+        if not habits:
+            habits = [
+                {'label': 'Regular conversations', 'icon': 'message-circle', 'frequency': 'Ongoing', 'active': True},
+                {'label': 'Sharing memories', 'icon': 'brain', 'frequency': 'Mental stimulation', 'active': True},
+            ]
+        
+        return habits
+    
+    # =========================================================================
+    # LIFE STORY (matching demo format)
+    # =========================================================================
+    
+    def _generate_life_story(self, conversations, knowledge_base, elder_name):
+        """
+        Generate life story section matching the demo component structure.
+        
+        Returns:
+        {
+            progress: { total_conversations, status_label, total_stories, total_themes, completeness_percent },
+            themes: [{ id, title, story_count, preview?, stories: [{ title, date_shared, excerpt, key_details }] }],
+            timeline: [{ era, label, detail, icon }]
+        }
+        """
+        # 1. PROGRESS
+        total_conversations = len(conversations)
+        
+        # Count stories from in_their_words data
+        in_their_words = self._build_in_their_words(conversations, elder_name)
+        themes_data = in_their_words.get('themes', [])
+        
+        total_stories = sum(t.get('total_quotes', 0) for t in themes_data)
+        total_themes = len(themes_data)
+        
+        # Calculate completeness (rough estimate)
+        # Assume 100 stories = complete biography
+        completeness = min(95, int((total_stories / 100) * 100))
+        if completeness < 10:
+            completeness = max(5, total_conversations * 3)  # At least show some progress
+        
+        # Status label based on progress
+        if completeness < 20:
+            status_label = "Early chapters being written..."
+        elif completeness < 50:
+            status_label = "Story taking shape..."
+        elif completeness < 80:
+            status_label = "Rich narrative emerging..."
+        else:
+            status_label = "Comprehensive life story captured"
+        
+        progress = {
+            'total_conversations': total_conversations,
+            'status_label': status_label,
+            'total_stories': total_stories,
+            'total_themes': total_themes,
+            'completeness_percent': completeness
+        }
+        
+        # 2. THEMES (from in_their_words, converted to demo format)
+        themes = []
+        for theme in themes_data[:6]:  # Top 6 themes
+            theme_id = theme.get('theme_id', 'general')
+            theme_name = theme.get('theme_name', 'Life Stories')
+            quotes = theme.get('quotes', [])
+            
+            # Convert quotes to stories format
+            stories = []
+            for quote in quotes[:4]:  # Max 4 stories per theme
+                stories.append({
+                    'title': self._generate_story_title(quote.get('quote', ''), theme_name),
+                    'date_shared': quote.get('date', ''),
+                    'excerpt': quote.get('quote', ''),
+                    'key_details': []  # Could extract from quote content
+                })
+            
+            themes.append({
+                'id': theme_id,
+                'title': theme_name,
+                'story_count': len(quotes),
+                'preview': f"Stories about {theme_name.lower()}" if not stories else None,
+                'stories': stories
+            })
+        
+        # 3. TIMELINE (generate from stories/knowledge base)
+        timeline = self._generate_life_timeline(conversations, knowledge_base, elder_name)
+        
+        return {
+            'progress': progress,
+            'themes': themes,
+            'timeline': timeline
+        }
+    
+    def _generate_story_title(self, quote, theme_name):
+        """Generate a short title for a story/quote"""
+        if not quote:
+            return theme_name
+        
+        # Try to extract a meaningful title from the quote
+        quote_lower = quote.lower()
+        
+        # Look for key phrases
+        title_patterns = [
+            ('remember', 'A Memory'),
+            ('my mother', 'About Mother'),
+            ('my father', 'About Father'),
+            ('when i was', 'Childhood Memory'),
+            ('years ago', 'Looking Back'),
+            ('we used to', 'How Things Were'),
+            ('my favorite', 'A Favorite Memory'),
+        ]
+        
+        for pattern, title in title_patterns:
+            if pattern in quote_lower:
+                return title
+        
+        # Default: use first few words
+        words = quote.split()[:5]
+        return ' '.join(words) + '...' if len(words) >= 5 else quote[:30]
+    
+    def _generate_life_timeline(self, conversations, knowledge_base, elder_name):
+        """Generate life timeline events from conversation data"""
+        timeline = []
+        
+        # Extract years/eras mentioned
+        years_mentioned = set()
+        locations_mentioned = set()
+        
+        for conv in conversations:
+            transcript = conv.get('transcript', '')
+            
+            # Find years (1940-2025)
+            import re
+            years = re.findall(r'\b(19[4-9][0-9]|20[0-2][0-9])\b', transcript)
+            years_mentioned.update(years)
+            
+            # Find locations
+            for loc in ['Poland', 'Canada', 'Toronto', 'Vancouver', 'Chicago', 'Arizona', 'England', 'London']:
+                if loc.lower() in transcript.lower():
+                    locations_mentioned.add(loc)
+        
+        # Build timeline from extracted data
+        sorted_years = sorted(years_mentioned)
+        
+        if sorted_years:
+            # Earliest year
+            earliest = sorted_years[0]
+            if int(earliest) < 1980:
+                timeline.append({
+                    'era': f"{earliest}s",
+                    'label': 'Early memories',
+                    'detail': 'Family history',
+                    'icon': 'heart'
+                })
+            
+            # Birth/childhood era
+            childhood_years = [y for y in sorted_years if 1970 <= int(y) <= 1990]
+            if childhood_years:
+                timeline.append({
+                    'era': childhood_years[0],
+                    'label': f'{elder_name} born',
+                    'detail': list(locations_mentioned)[0] if locations_mentioned else 'Unknown',
+                    'icon': 'baby'
+                })
+        
+        # Always add present
+        timeline.append({
+            'era': '2025',
+            'label': 'Present day',
+            'detail': 'Conversations with Aila',
+            'icon': 'home'
+        })
+        
+        # If no timeline data, create default
+        if len(timeline) < 2:
+            timeline = [
+                {'era': 'Past', 'label': 'Life experiences', 'detail': 'Stories being captured', 'icon': 'book-open'},
+                {'era': 'Present', 'label': 'Current chapter', 'detail': 'Conversations with Aila', 'icon': 'home'}
+            ]
+        
+        return timeline
         """Analyze health patterns with event context"""
         health_mentions = []
         concerns = []
