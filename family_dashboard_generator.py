@@ -710,32 +710,173 @@ class FamilyDashboardGenerator:
         return context
     
     def _detect_health_events(self, conversations, knowledge_base):
-        """Detect significant health events and link related symptoms"""
-        event_mentions = defaultdict(list)
+        """
+        Detect significant health events - SIMPLIFIED VERSION
+        
+        Creates ONE primary injury event and links all symptoms to it.
+        Only extracts from USER content, not agent responses.
+        """
+        primary_injury = None
+        symptoms = []
+        
+        # Collect all health-related info
+        all_health_summaries = []
+        has_fall = False
+        body_part = None
+        first_mention_date = None
+        last_mention_date = None
+        mention_count = 0
         
         for conv in conversations:
             timestamp = conv.get('timestamp', '')
             analysis = conv.get('analysis', {})
             health = analysis.get('health', {})
+            
+            # Get health summary (this is the BEST source - already analyzed)
             summary = health.get('summary', '')
-            red_flags = health.get('red_flags', [])
-            transcript = conv.get('transcript', '')
-            
             if summary:
-                self._extract_health_mentions(event_mentions, summary, timestamp, 'health_summary')
+                summary_lower = summary.lower()
+                all_health_summaries.append({
+                    'text': summary,
+                    'timestamp': timestamp
+                })
+                
+                # Check for fall
+                if any(w in summary_lower for w in ['fell', 'fall', 'fallen', 'ladder']):
+                    has_fall = True
+                    mention_count += 1
+                    
+                # Check for body part
+                if not body_part:
+                    body_part = self._extract_body_part(summary_lower)
+                
+                # Track dates
+                if timestamp:
+                    if not first_mention_date or timestamp < first_mention_date:
+                        first_mention_date = timestamp
+                    if not last_mention_date or timestamp > last_mention_date:
+                        last_mention_date = timestamp
             
-            for flag in red_flags:
+            # Also check red flags
+            for flag in health.get('red_flags', []):
                 flag_text = flag if isinstance(flag, str) else str(flag)
-                self._extract_health_mentions(event_mentions, flag_text, timestamp, 'red_flag')
+                flag_lower = flag_text.lower()
+                
+                if any(w in flag_lower for w in ['fell', 'fall', 'fallen', 'ladder']):
+                    has_fall = True
+                
+                if not body_part:
+                    body_part = self._extract_body_part(flag_lower)
             
+            # Check transcript for USER content only
+            transcript = conv.get('transcript', '')
             if transcript:
-                self._extract_health_mentions(event_mentions, transcript, timestamp, 'transcript')
+                # Extract only USER lines
+                user_content = self._extract_user_content(transcript)
+                user_lower = user_content.lower()
+                
+                if any(w in user_lower for w in ['fell', 'fall', 'fallen', 'ladder']):
+                    has_fall = True
+                    mention_count += 1
+                
+                if not body_part:
+                    body_part = self._extract_body_part(user_lower)
         
+        # Also check knowledge base for USER content
         if knowledge_base:
-            self._extract_health_mentions(event_mentions, knowledge_base, '', 'knowledge_base')
+            kb_lower = knowledge_base.lower()
+            if any(w in kb_lower for w in ['fell', 'fall', 'fallen', 'ladder']):
+                has_fall = True
+            if not body_part:
+                body_part = self._extract_body_part(kb_lower)
         
-        events = self._consolidate_health_events(event_mentions)
-        return self._link_symptoms_to_causes(events)
+        events = []
+        
+        # Create ONE primary injury event if we detected a fall/injury
+        if has_fall and all_health_summaries:
+            # Find the BEST description (longest, most informative)
+            best_summary = max(all_health_summaries, key=lambda x: len(x['text']))
+            
+            # Clean up the description
+            description = best_summary['text']
+            description = self._smart_truncate(description, 400)
+            
+            # Generate title
+            if body_part:
+                title = f"Fall Incident - {body_part.title()} Injury"
+            else:
+                title = "Fall Incident"
+            
+            primary_injury = {
+                'event_id': 'HE_fall_001',
+                'type': 'injury',
+                'severity': 'high',
+                'title': title,
+                'description': description,
+                'detected_on': first_mention_date or '',
+                'detected_on_formatted': self._format_date(first_mention_date),
+                'last_mentioned': last_mention_date or '',
+                'last_mentioned_formatted': self._format_date(last_mention_date),
+                'body_part': body_part,
+                'keyword': 'fall',
+                'related_symptoms': [],
+                'status': 'active',
+                'needs_family_followup': True,
+                'mentions_count': max(mention_count, len(all_health_summaries)),
+                'family_actions': [],
+            }
+            events.append(primary_injury)
+        
+        # Check for symptoms that should be LINKED to the injury (not separate events)
+        # We'll just note them in related_symptoms, not create separate events
+        if primary_injury and all_health_summaries:
+            symptom_keywords = ['pain', 'sleep', 'sore', 'tired', 'stiff']
+            found_symptoms = set()
+            
+            for summary_data in all_health_summaries:
+                summary_lower = summary_data['text'].lower()
+                
+                for symptom in symptom_keywords:
+                    if symptom in summary_lower and symptom not in found_symptoms:
+                        found_symptoms.add(symptom)
+                        
+                        # Create readable symptom name
+                        if body_part and symptom != 'sleep':
+                            symptom_name = f"{body_part.title()} {symptom}"
+                        elif symptom == 'sleep':
+                            symptom_name = "Sleep difficulties"
+                        else:
+                            symptom_name = symptom.title()
+                        
+                        primary_injury['related_symptoms'].append({
+                            'symptom': symptom_name,
+                            'status': 'ongoing'
+                        })
+        
+        return events
+    
+    def _extract_user_content(self, transcript):
+        """Extract only USER content from transcript, filtering out agent responses"""
+        if not transcript:
+            return ""
+        
+        user_lines = []
+        lines = transcript.split('\n')
+        
+        in_user_section = False
+        for line in lines:
+            line_stripped = line.strip()
+            
+            # Check for speaker markers
+            if line_stripped.startswith('User:'):
+                in_user_section = True
+                user_lines.append(line_stripped[5:].strip())
+            elif line_stripped.startswith('Aila:') or line_stripped.startswith('Assistant:'):
+                in_user_section = False
+            elif in_user_section and line_stripped:
+                user_lines.append(line_stripped)
+        
+        return ' '.join(user_lines)
     
     def _extract_health_mentions(self, event_mentions, text, timestamp, source):
         """Extract health-related mentions from text"""
