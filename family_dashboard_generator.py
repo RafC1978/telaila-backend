@@ -335,8 +335,16 @@ class FamilyDashboardGenerator:
                 # Try to find context from stories
                 story_context = None
                 for story in stories:
-                    if any(word in quote_lower for word in story.get('topic', '').lower().split()):
-                        story_context = story.get('topic')
+                    # Handle both dict and string story formats
+                    if isinstance(story, dict):
+                        topic = story.get('topic', '')
+                    elif isinstance(story, str):
+                        topic = story
+                    else:
+                        continue
+                    
+                    if topic and any(word in quote_lower for word in topic.lower().split()):
+                        story_context = topic
                         break
                 
                 biographical_quotes.append({
