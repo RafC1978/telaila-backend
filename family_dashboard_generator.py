@@ -49,6 +49,7 @@ class FamilyDashboardGenerator:
         
         # Theme icons for display (will be matched to actual topics)
         self.theme_icons = {
+            # Broad categories
             'family': '👨‍👩‍👧‍👦',
             'health': '🏥',
             'travel': '✈️',
@@ -69,7 +70,18 @@ class FamilyDashboardGenerator:
             'faith': '🙏',
             'weather': '🌤️',
             'shopping': '🛍️',
-            'general': '💬'
+            'general': '💬',
+            
+            # Specific themes
+            'snowbird': '🌴',
+            'poker': '🃏',
+            'rv_life': '🚐',
+            'social_outings': '🍽️',
+            'daily_errands': '📋',
+            'health_recovery': '💪',
+            'friends_social': '👥',
+            'visitors': '🏠',
+            'conversations': '💬',
         }
         
         # Keywords to help categorize topics into icon groups
@@ -441,30 +453,96 @@ class FamilyDashboardGenerator:
     
     def _normalize_theme_id(self, topic):
         """
-        Create a normalized theme ID that groups similar topics together.
+        Create a normalized theme ID that groups SIMILAR topics together,
+        but preserves distinct meaningful topics.
         
-        E.g., "Crocuses", "Spring crocuses", "Crocuses and spring" -> "crocuses"
+        LESS AGGRESSIVE than before:
+        - "back recovery" + "back pain" → "back" (same subject)
+        - "snowbird lifestyle" stays as "snowbird" (distinct topic)
+        - "poker games" stays as "poker" (distinct topic)
+        - "crocuses" + "spring flowers" → "nature" (similar enough)
+        
+        We want GT to have: Snowbird Life, Poker & Social, Health Recovery, etc.
+        NOT everything lumped into "Health & Wellness"
         """
         if not topic:
             return 'general'
         
         topic_lower = topic.lower().strip()
         
-        # Check if it matches a category - use that as the normalized ID
-        for category, keywords in self.topic_categories.items():
-            for kw in keywords:
-                if kw in topic_lower:
-                    # Special case: if topic is primarily about one thing, use more specific
-                    # E.g., "cats Yo-Yo and Cinnamon" -> "pets" not something else
-                    return category
+        # PRIORITY 1: Check for SPECIFIC meaningful topics that should stay distinct
+        specific_topics = {
+            'snowbird': 'snowbird',
+            'poker': 'poker',
+            'rv life': 'rv_life',
+            'rv ': 'rv_life',
+            'trailer': 'rv_life', 
+            'dinner': 'social_outings',
+            'lunch': 'social_outings',
+            'restaurant': 'social_outings',
+            'chinese food': 'social_outings',
+            'sushi': 'social_outings',
+            'storage': 'daily_errands',
+            'errand': 'daily_errands',
+            'keys': 'daily_errands',
+            'lockout': 'daily_errands',
+        }
         
-        # Extract main noun (first significant word that's not a common word)
-        common_words = {'the', 'a', 'an', 'and', 'or', 'with', 'about', 'for', 'to', 'of', 'in', 'on', 'at', 'by'}
+        for keyword, theme_id in specific_topics.items():
+            if keyword in topic_lower:
+                return theme_id
+        
+        # PRIORITY 2: Extract primary subject from topic
+        # "back recovery progress" → "back"
+        # "sleep challenges" → "sleep"
+        # "weather conditions" → "weather"
+        common_words = {
+            'the', 'a', 'an', 'and', 'or', 'with', 'about', 'for', 'to', 'of', 
+            'in', 'on', 'at', 'by', 'progress', 'challenges', 'conditions',
+            'management', 'incident', 'question', 'lifestyle', 'connections',
+            'nature', 'perspectives', 'adventures', 'technical'
+        }
+        
         words = re.findall(r'[a-z]+', topic_lower)
+        primary_word = None
         
         for word in words:
             if word not in common_words and len(word) > 2:
-                return word
+                primary_word = word
+                break
+        
+        if primary_word:
+            # Map some primary words to better theme IDs
+            word_mappings = {
+                'back': 'health_recovery',
+                'sleep': 'health_recovery', 
+                'pain': 'health_recovery',
+                'injury': 'health_recovery',
+                'recovery': 'health_recovery',
+                'weather': 'weather',
+                'canadian': 'visitors',
+                'visitors': 'visitors',
+                'friends': 'friends_social',
+                'friendships': 'friends_social',
+                'social': 'friends_social',
+                'emergency': 'daily_life',
+                'contact': 'daily_life',
+                'water': 'rv_life',
+                'tank': 'rv_life',
+                'problem': 'daily_life',
+                'solving': 'daily_life',
+                'human': 'conversations',  # AI consciousness topic
+                'consciousness': 'conversations',
+                'empathy': 'conversations',
+            }
+            
+            return word_mappings.get(primary_word, primary_word)
+        
+        # FALLBACK: Use generic category matching (least preferred)
+        for category, keywords in self.topic_categories.items():
+            for kw in keywords:
+                if kw in topic_lower:
+                    return category
         
         return self._make_theme_id(topic)
     
@@ -713,8 +791,9 @@ class FamilyDashboardGenerator:
     def _generate_theme_display_name(self, theme_id, original_topics):
         """Generate a nice display name for a theme based on its ID and original topics"""
         
-        # If theme_id matches a known category, use a nice name
-        category_names = {
+        # Map theme IDs to nice display names
+        display_names = {
+            # Broad categories
             'family': 'Family',
             'health': 'Health & Wellness',
             'travel': 'Travel & Outings',
@@ -732,10 +811,22 @@ class FamilyDashboardGenerator:
             'faith': 'Faith & Spirituality',
             'weather': 'Weather',
             'shopping': 'Shopping & Errands',
+            
+            # Specific themes (from _normalize_theme_id)
+            'snowbird': 'Snowbird Life',
+            'poker': 'Poker & Games',
+            'rv_life': 'RV Life',
+            'social_outings': 'Dining & Outings',
+            'daily_errands': 'Daily Errands',
+            'health_recovery': 'Health & Recovery',
+            'friends_social': 'Friends & Social',
+            'visitors': 'Visitors & Guests',
+            'daily_life': 'Daily Life',
+            'conversations': 'Conversations',
         }
         
-        if theme_id in category_names:
-            return category_names[theme_id]
+        if theme_id in display_names:
+            return display_names[theme_id]
         
         # Otherwise, try to create a nice name from the theme_id
         if theme_id:
