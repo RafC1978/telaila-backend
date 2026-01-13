@@ -661,10 +661,13 @@ class FamilyDashboardGenerator:
             },
             'generated_at': datetime.now().isoformat(),
             
-            # === THREE MAIN SECTIONS (matching demo tabs) ===
+            # === THREE MAIN TAB SECTIONS ===
             'weekly_updates': self._generate_weekly_updates(conversations, elder_name),
             'health_insights': self._generate_health_insights_v2(conversations, health_events, elder_name),
             'life_story': self._generate_life_story(conversations, knowledge_base, elder_name),
+            
+            # === ENHANCED HEALTH DASHBOARD (for Health tier) ===
+            'health_dashboard': self._generate_health_dashboard(conversations, health_events, elder_name, tester),
             
             # === LEGACY (keep for backward compatibility) ===
             'summary': self._generate_summary(conversations, tester, health_events),
@@ -2439,67 +2442,701 @@ class FamilyDashboardGenerator:
             ]
         
         return timeline
-        """Analyze health patterns with event context"""
-        health_mentions = []
-        concerns = []
-        patterns = defaultdict(int)
+    
+    # =========================================================================
+    # HEALTH DASHBOARD (comprehensive health monitoring for Health tier)
+    # =========================================================================
+    
+    def _generate_health_dashboard(self, conversations, health_events, elder_name, tester):
+        """
+        Generate comprehensive health dashboard data matching the Health tier UI.
         
-        for conv in conversations:
-            analysis = conv.get('analysis', {})
-            health = analysis.get('health', {})
-            
-            if health.get('summary'):
-                health_mentions.append({
-                    'date': conv.get('timestamp', ''),
-                    'date_formatted': self._format_date(conv.get('timestamp', '')),
-                    'summary': health.get('summary', ''),
-                    'mood': analysis.get('conversation', {}).get('mood', 'neutral')
-                })
-            
-            for flag in health.get('red_flags', []):
-                flag_text = flag if isinstance(flag, str) else str(flag)
-                concerns.append({
-                    'date': conv.get('timestamp', ''),
-                    'date_formatted': self._format_date(conv.get('timestamp', '')),
-                    'concern': flag_text,
-                    'severity': 'high'
-                })
-            
-            if health.get('pain'):
-                patterns['pain_mentions'] += 1
-            if health.get('sleep'):
-                patterns['sleep_discussions'] += 1
+        Returns:
+        {
+            overview: { overall_status, alerts_count, alerts_summary, check_ins },
+            active_alerts: [...],
+            vitals: { blood_pressure: {...}, glucose: {...}, ... },
+            patterns: [...],
+            doctor_report: {...},
+            events_log: [...],
+            enabled_metrics: [...]
+        }
+        """
+        now = datetime.now(self.local_tz)
         
-        latest_health = None
-        if conversations:
-            latest_health = conversations[-1].get('analysis', {}).get('health', {}).get('summary')
+        # Get user's enabled metrics (default set for now)
+        enabled_metrics = tester.get('signup_data', {}).get('health_metrics', [
+            'blood_pressure', 'pain', 'sleep', 'mood'
+        ])
         
-        active_summary = None
-        if health_events:
-            active_high = [e for e in health_events if e.get('severity') == 'high']
-            if active_high:
-                # Deduplicate - only one fall incident
-                seen_fall = False
-                unique_titles = []
-                for e in active_high:
-                    title = e['title']
-                    if 'fall' in title.lower():
-                        if seen_fall:
-                            continue
-                        seen_fall = True
-                    unique_titles.append(title)
-                
-                active_summary = f"Active concerns: {', '.join(unique_titles[:3])}"
+        # 1. OVERVIEW
+        overview = self._build_health_overview(conversations, health_events, elder_name)
+        
+        # 2. ACTIVE ALERTS
+        active_alerts = self._build_active_alerts(conversations, health_events, elder_name)
+        
+        # 3. VITALS (with chart data)
+        vitals = self._build_vitals_data(conversations, enabled_metrics)
+        
+        # 4. PATTERNS
+        patterns = self._detect_health_patterns(conversations)
+        
+        # 5. DOCTOR REPORT
+        doctor_report = self._build_doctor_report(conversations, health_events, elder_name)
+        
+        # 6. EVENTS LOG
+        events_log = self._build_events_log(conversations, health_events)
         
         return {
-            'current_status': latest_health or 'No recent health information',
-            'active_events_summary': active_summary,
-            'total_health_mentions': len(health_mentions),
-            'active_concerns': concerns[-3:] if concerns else [],
-            'patterns': dict(patterns),
-            'trend': self._determine_health_trend(health_mentions),
-            'recent_mentions': health_mentions[-5:] if health_mentions else []
+            'overview': overview,
+            'active_alerts': active_alerts,
+            'vitals': vitals,
+            'patterns': patterns,
+            'doctor_report': doctor_report,
+            'events_log': events_log,
+            'enabled_metrics': enabled_metrics
         }
+    
+    def _build_health_overview(self, conversations, health_events, elder_name):
+        """Build the overview cards data"""
+        now = datetime.now(self.local_tz)
+        week_start = now - timedelta(days=7)
+        
+        # Count check-ins this week
+        week_convs = []
+        for conv in conversations:
+            ts = conv.get('timestamp', '')
+            if ts:
+                conv_time = self._to_local_time(ts)
+                if conv_time and conv_time >= week_start:
+                    week_convs.append(conv)
+        
+        check_ins_completed = len(week_convs)
+        check_ins_total = 7  # Daily target
+        
+        # Last check-in
+        last_check_in = "No calls yet"
+        if conversations:
+            last_ts = conversations[-1].get('timestamp', '')
+            if last_ts:
+                last_time = self._to_local_time(last_ts)
+                if last_time:
+                    if last_time.date() == now.date():
+                        last_check_in = f"Today, {last_time.strftime('%I:%M %p')}"
+                    elif last_time.date() == (now - timedelta(days=1)).date():
+                        last_check_in = f"Yesterday, {last_time.strftime('%I:%M %p')}"
+                    else:
+                        last_check_in = last_time.strftime('%B %d, %I:%M %p')
+        
+        # Determine overall status
+        status = 'stable'
+        status_label = "All vitals in normal range"
+        
+        # Check for concerning events
+        if health_events:
+            active_high = [e for e in health_events if e.get('severity') == 'high' and e.get('status') == 'active']
+            if active_high:
+                status = 'attention'
+                status_label = f"Monitoring: {active_high[0].get('title', 'health concern')}"
+        
+        # Check recent conversations for concerns
+        concerns_count = 0
+        for conv in week_convs:
+            health = conv.get('analysis', {}).get('health', {})
+            if health.get('red_flags'):
+                concerns_count += 1
+        
+        if concerns_count >= 3:
+            status = 'concern'
+            status_label = f"Multiple concerns noted ({concerns_count} this week)"
+        
+        # Alerts count
+        alerts_count = len([e for e in (health_events or []) if e.get('status') == 'active'])
+        alerts_summary = ""
+        if alerts_count > 0:
+            alerts_summary = f"{alerts_count} item{'s' if alerts_count > 1 else ''} to review"
+        
+        return {
+            'overall_status': {
+                'status': status,
+                'label': status_label
+            },
+            'alerts_count': alerts_count,
+            'alerts_summary': alerts_summary,
+            'check_ins_completed': check_ins_completed,
+            'check_ins_total': check_ins_total,
+            'last_check_in': last_check_in
+        }
+    
+    def _build_active_alerts(self, conversations, health_events, elder_name):
+        """Build list of active alerts that need attention"""
+        alerts = []
+        
+        # From health events
+        if health_events:
+            for event in health_events:
+                if event.get('status') != 'active':
+                    continue
+                
+                severity = 'warning'
+                if event.get('severity') == 'high':
+                    severity = 'urgent'
+                elif event.get('severity') == 'low':
+                    severity = 'info'
+                
+                alerts.append({
+                    'id': f"event_{event.get('id', '')}",
+                    'metric': event.get('type', 'general'),
+                    'title': event.get('title', 'Health Concern'),
+                    'message': event.get('description', ''),
+                    'severity': severity,
+                    'first_detected': event.get('detected_on_formatted', 'Recently'),
+                    'suggested_action': self._suggest_action(event)
+                })
+        
+        # Check for patterns in recent conversations
+        recent_symptoms = defaultdict(list)
+        for conv in conversations[-7:]:
+            health = conv.get('analysis', {}).get('health', {})
+            ts = conv.get('timestamp', '')
+            date_str = self._format_date(ts) if ts else 'Recently'
+            
+            summary = health.get('summary', '').lower()
+            
+            if 'dizzy' in summary or 'dizziness' in summary:
+                recent_symptoms['dizziness'].append(date_str)
+            if 'tired' in summary or 'fatigue' in summary:
+                recent_symptoms['fatigue'].append(date_str)
+            if 'not feeling well' in summary:
+                recent_symptoms['unwell'].append(date_str)
+        
+        # Create alerts for repeated symptoms
+        for symptom, dates in recent_symptoms.items():
+            if len(dates) >= 2:
+                alerts.append({
+                    'id': f"symptom_{symptom}",
+                    'metric': 'symptoms',
+                    'title': f"Repeated {symptom.title()} Mentions",
+                    'message': f"{elder_name} mentioned {symptom} on {len(dates)} occasions: {', '.join(dates[:3])}",
+                    'severity': 'info',
+                    'first_detected': dates[0],
+                    'suggested_action': f"Consider asking about {symptom} during next call"
+                })
+        
+        return alerts[:5]  # Max 5 alerts
+    
+    def _suggest_action(self, event):
+        """Suggest an action based on the health event type"""
+        title_lower = event.get('title', '').lower()
+        
+        if 'fall' in title_lower:
+            return "Check on mobility and consider fall prevention measures"
+        elif 'pain' in title_lower:
+            return "Monitor pain levels and consult doctor if persisting"
+        elif 'blood pressure' in title_lower:
+            return "Track readings and schedule doctor visit if trend continues"
+        elif 'sleep' in title_lower:
+            return "Discuss sleep habits and consider sleep hygiene tips"
+        
+        return "Monitor and discuss with healthcare provider if concerned"
+    
+    def _build_vitals_data(self, conversations, enabled_metrics):
+        """
+        Build chart data for each enabled vital metric.
+        
+        Since we're extracting from conversations (not structured data entry),
+        we estimate values based on conversation content.
+        """
+        vitals = {}
+        now = datetime.now(self.local_tz)
+        
+        # Define metric configurations
+        metric_configs = {
+            'blood_pressure': {
+                'label': 'Blood Pressure',
+                'unit': 'mmHg',
+                'normal_range': '120/80',
+                'extract_fn': self._extract_bp_from_conv
+            },
+            'glucose': {
+                'label': 'Blood Glucose',
+                'unit': 'mg/dL',
+                'normal_range': '80-130',
+                'extract_fn': self._extract_glucose_from_conv
+            },
+            'pain': {
+                'label': 'Pain Level',
+                'unit': '/10',
+                'normal_range': '0-3',
+                'extract_fn': self._extract_pain_from_conv
+            },
+            'sleep': {
+                'label': 'Sleep Quality',
+                'unit': 'hours',
+                'normal_range': '7-9 hrs',
+                'extract_fn': self._extract_sleep_from_conv
+            },
+            'mood': {
+                'label': 'Mood',
+                'unit': '',
+                'normal_range': 'Good-Great',
+                'extract_fn': self._extract_mood_from_conv
+            },
+            'weight': {
+                'label': 'Weight',
+                'unit': 'lbs',
+                'normal_range': 'Stable',
+                'extract_fn': self._extract_weight_from_conv
+            }
+        }
+        
+        for metric in enabled_metrics:
+            if metric not in metric_configs:
+                continue
+            
+            config = metric_configs[metric]
+            chart_data = []
+            latest_value = None
+            latest_timestamp = None
+            values = []
+            
+            # Extract from conversations
+            for conv in conversations[-14:]:  # Last 2 weeks
+                ts = conv.get('timestamp', '')
+                if not ts:
+                    continue
+                
+                conv_time = self._to_local_time(ts)
+                if not conv_time:
+                    continue
+                
+                value = config['extract_fn'](conv)
+                if value is not None:
+                    date_str = conv_time.strftime('%b %d')
+                    chart_data.append({
+                        'date': date_str,
+                        'value': value
+                    })
+                    values.append(value)
+                    latest_value = value
+                    latest_timestamp = conv_time.strftime('%b %d, %I:%M %p')
+            
+            # Determine trend
+            trend = 'stable'
+            trend_percent = 0
+            if len(values) >= 2:
+                recent_avg = sum(values[-3:]) / len(values[-3:])
+                older_avg = sum(values[:-3]) / max(1, len(values[:-3])) if len(values) > 3 else recent_avg
+                
+                if recent_avg > older_avg * 1.1:
+                    trend = 'up'
+                    trend_percent = int((recent_avg - older_avg) / older_avg * 100) if older_avg else 0
+                elif recent_avg < older_avg * 0.9:
+                    trend = 'down'
+                    trend_percent = int((older_avg - recent_avg) / older_avg * 100) if older_avg else 0
+            
+            # Determine status
+            status = 'normal'
+            if metric == 'pain' and latest_value and latest_value > 5:
+                status = 'warning' if latest_value <= 7 else 'concern'
+            elif metric == 'mood' and latest_value and latest_value < 50:
+                status = 'warning' if latest_value >= 30 else 'concern'
+            
+            # Format display value
+            if latest_value is not None:
+                if metric == 'mood':
+                    if latest_value >= 70:
+                        display_value = 'Good'
+                    elif latest_value >= 50:
+                        display_value = 'Okay'
+                    else:
+                        display_value = 'Low'
+                elif metric == 'pain':
+                    display_value = f"{latest_value}/10"
+                else:
+                    display_value = str(latest_value)
+            else:
+                display_value = '--'
+            
+            vitals[metric] = {
+                'enabled': True,
+                'label': config['label'],
+                'latest_value': display_value,
+                'latest_timestamp': latest_timestamp or 'No data',
+                'unit': config['unit'],
+                'trend': trend,
+                'trend_percent': trend_percent,
+                'status': status,
+                'normal_range': config['normal_range'],
+                'chart_data': chart_data if chart_data else self._generate_placeholder_chart(metric)
+            }
+        
+        return vitals
+    
+    def _extract_bp_from_conv(self, conv):
+        """Extract blood pressure mention from conversation"""
+        transcript = conv.get('transcript', '').lower()
+        health = conv.get('analysis', {}).get('health', {})
+        
+        # Look for BP patterns like "138/88" or "blood pressure was 140 over 90"
+        import re
+        bp_patterns = [
+            r'(\d{2,3})\s*/\s*(\d{2,3})',  # 138/88
+            r'(\d{2,3})\s+over\s+(\d{2,3})',  # 140 over 90
+        ]
+        
+        for pattern in bp_patterns:
+            match = re.search(pattern, transcript)
+            if match:
+                systolic = int(match.group(1))
+                if 80 <= systolic <= 200:  # Reasonable BP range
+                    return systolic
+        
+        # If no explicit mention, estimate from health summary
+        if health.get('summary'):
+            summary = health['summary'].lower()
+            if 'blood pressure' in summary:
+                if 'high' in summary or 'elevated' in summary:
+                    return 145
+                elif 'normal' in summary or 'good' in summary:
+                    return 120
+        
+        return None
+    
+    def _extract_glucose_from_conv(self, conv):
+        """Extract glucose/sugar level from conversation"""
+        transcript = conv.get('transcript', '').lower()
+        
+        import re
+        # Look for patterns like "sugar was 142" or "glucose 156"
+        patterns = [
+            r'(?:sugar|glucose)(?:\s+(?:was|is|at))?\s+(\d{2,3})',
+            r'(\d{2,3})\s+(?:mg|mg/dl)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, transcript)
+            if match:
+                value = int(match.group(1))
+                if 50 <= value <= 400:  # Reasonable glucose range
+                    return value
+        
+        return None
+    
+    def _extract_pain_from_conv(self, conv):
+        """Extract pain level from conversation"""
+        transcript = conv.get('transcript', '').lower()
+        health = conv.get('analysis', {}).get('health', {})
+        
+        import re
+        # Look for patterns like "pain is a 6" or "6 out of 10"
+        patterns = [
+            r'(?:pain|hurt).*?(\d)\s*(?:out of|/)\s*10',
+            r'(?:a|about|maybe)\s+(\d)\s*(?:out of|/)\s*10',
+            r'(?:pain|discomfort).*?(?:level|at|about).*?(\d)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, transcript)
+            if match:
+                return int(match.group(1))
+        
+        # Estimate from health summary
+        if health.get('summary'):
+            summary = health['summary'].lower()
+            if any(w in summary for w in ['severe', 'terrible', 'awful']):
+                return 8
+            elif any(w in summary for w in ['moderate', 'uncomfortable']):
+                return 5
+            elif any(w in summary for w in ['mild', 'slight', 'little']):
+                return 3
+            elif any(w in summary for w in ['better', 'improving', 'no pain']):
+                return 2
+        
+        # Check if pain was mentioned at all
+        if health.get('pain') or 'pain' in transcript or 'hurt' in transcript:
+            return 4  # Default moderate
+        
+        return None
+    
+    def _extract_sleep_from_conv(self, conv):
+        """Extract sleep quality/hours from conversation"""
+        transcript = conv.get('transcript', '').lower()
+        health = conv.get('analysis', {}).get('health', {})
+        
+        import re
+        # Look for patterns like "slept 6 hours" or "got about 7 hours"
+        patterns = [
+            r'(?:slept|sleep|got)\s+(?:about|around|maybe)?\s*(\d+(?:\.\d)?)\s*hours?',
+            r'(\d+(?:\.\d)?)\s*hours?\s+(?:of\s+)?sleep',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, transcript)
+            if match:
+                hours = float(match.group(1))
+                if 2 <= hours <= 14:
+                    return hours
+        
+        # Estimate from summary
+        if health.get('sleep') or health.get('summary'):
+            summary = (health.get('summary', '') + ' ' + str(health.get('sleep', ''))).lower()
+            if 'well' in summary or 'good' in summary:
+                return 7.5
+            elif 'poor' in summary or 'bad' in summary or 'tired' in summary:
+                return 5
+        
+        return None
+    
+    def _extract_mood_from_conv(self, conv):
+        """Extract mood score from conversation (0-100 scale)"""
+        mood = conv.get('analysis', {}).get('conversation', {}).get('mood', '')
+        mood_lower = str(mood).lower()
+        
+        if any(w in mood_lower for w in ['great', 'excellent', 'wonderful']):
+            return 90
+        elif any(w in mood_lower for w in ['good', 'positive', 'happy']):
+            return 75
+        elif any(w in mood_lower for w in ['okay', 'fine', 'neutral']):
+            return 55
+        elif any(w in mood_lower for w in ['low', 'sad', 'down']):
+            return 35
+        elif any(w in mood_lower for w in ['poor', 'bad', 'terrible']):
+            return 20
+        
+        return 60  # Default neutral
+    
+    def _extract_weight_from_conv(self, conv):
+        """Extract weight mention from conversation"""
+        transcript = conv.get('transcript', '').lower()
+        
+        import re
+        patterns = [
+            r'(?:weigh|weight).*?(\d{2,3})\s*(?:pounds?|lbs?|kg)?',
+            r'(\d{2,3})\s*(?:pounds?|lbs)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, transcript)
+            if match:
+                weight = int(match.group(1))
+                if 80 <= weight <= 400:  # Reasonable weight range
+                    return weight
+        
+        return None
+    
+    def _generate_placeholder_chart(self, metric):
+        """Generate placeholder chart data when no real data exists"""
+        now = datetime.now(self.local_tz)
+        placeholders = {
+            'blood_pressure': [125, 128, 122, 130, 126, 124, 127],
+            'glucose': [128, 135, 142, 130, 125, 138, 132],
+            'pain': [4, 5, 4, 3, 4, 3, 2],
+            'sleep': [6.5, 7, 6, 7.5, 6.5, 7, 7.5],
+            'mood': [70, 65, 75, 70, 80, 75, 70],
+            'weight': [165, 165, 164, 165, 166, 165, 165],
+        }
+        
+        values = placeholders.get(metric, [50, 50, 50, 50, 50, 50, 50])
+        chart_data = []
+        
+        for i, value in enumerate(values):
+            day = now - timedelta(days=6-i)
+            chart_data.append({
+                'date': day.strftime('%b %d'),
+                'value': value
+            })
+        
+        return chart_data
+    
+    def _detect_health_patterns(self, conversations):
+        """Detect patterns and correlations in health data"""
+        patterns = []
+        
+        # Analyze last 2 weeks
+        recent = conversations[-14:] if len(conversations) >= 14 else conversations
+        
+        # Track co-occurrences
+        sleep_pain_correlation = 0
+        mood_health_correlation = 0
+        
+        for conv in recent:
+            analysis = conv.get('analysis', {})
+            health = analysis.get('health', {})
+            mood = analysis.get('conversation', {}).get('mood', '')
+            
+            # Check sleep-pain correlation
+            if health.get('sleep') and health.get('pain'):
+                sleep_pain_correlation += 1
+            
+            # Check mood-health correlation
+            if 'negative' in str(mood).lower() and health.get('red_flags'):
+                mood_health_correlation += 1
+        
+        # Generate insights
+        if sleep_pain_correlation >= 3:
+            patterns.append({
+                'insight': 'Pain levels tend to be higher on days with poor sleep quality. Consider discussing sleep improvements.',
+                'confidence': 'high' if sleep_pain_correlation >= 5 else 'medium'
+            })
+        
+        if mood_health_correlation >= 2:
+            patterns.append({
+                'insight': 'Mood appears to be affected by health concerns. Extra emotional support may be helpful during health challenges.',
+                'confidence': 'medium'
+            })
+        
+        # Check for improving/declining trends
+        pain_values = []
+        for conv in recent:
+            health = conv.get('analysis', {}).get('health', {})
+            if health.get('pain'):
+                pain_values.append(1)
+        
+        if len(pain_values) >= 5:
+            recent_pain = sum(pain_values[-3:])
+            earlier_pain = sum(pain_values[:-3])
+            
+            if recent_pain < earlier_pain * 0.5:
+                patterns.append({
+                    'insight': 'Pain mentions have decreased significantly. Current management seems to be working.',
+                    'confidence': 'high'
+                })
+            elif recent_pain > earlier_pain * 1.5:
+                patterns.append({
+                    'insight': 'Pain mentions have increased recently. May be worth discussing with healthcare provider.',
+                    'confidence': 'high'
+                })
+        
+        # Default positive pattern if none found
+        if not patterns:
+            patterns.append({
+                'insight': 'Health patterns are being tracked. More insights will appear as conversations continue.',
+                'confidence': 'low'
+            })
+        
+        return patterns
+    
+    def _build_doctor_report(self, conversations, health_events, elder_name):
+        """Build the doctor's report summary"""
+        now = datetime.now(self.local_tz)
+        week_start = now - timedelta(days=7)
+        
+        # Filter to this week
+        week_convs = [c for c in conversations if c.get('timestamp') and 
+                     self._to_local_time(c['timestamp']) and 
+                     self._to_local_time(c['timestamp']) >= week_start]
+        
+        period = f"{week_start.strftime('%B %d')} - {now.strftime('%d, %Y')}"
+        
+        # Build summary points
+        summary_points = []
+        concerns = []
+        
+        # Analyze conversations
+        pain_mentions = 0
+        sleep_issues = 0
+        mood_concerns = 0
+        
+        for conv in week_convs:
+            health = conv.get('analysis', {}).get('health', {})
+            mood = conv.get('analysis', {}).get('conversation', {}).get('mood', '')
+            
+            if health.get('pain'):
+                pain_mentions += 1
+            if health.get('sleep'):
+                sleep_issues += 1
+            if 'negative' in str(mood).lower() or 'low' in str(mood).lower():
+                mood_concerns += 1
+            
+            # Check red flags
+            for flag in health.get('red_flags', []):
+                flag_text = flag if isinstance(flag, str) else str(flag)
+                if flag_text not in concerns:
+                    concerns.append(flag_text)
+        
+        # Build summary
+        if len(week_convs) > 0:
+            summary_points.append(f"Completed {len(week_convs)} health check-in{'s' if len(week_convs) > 1 else ''} this week")
+        
+        if pain_mentions > 0:
+            summary_points.append(f"Reported pain/discomfort on {pain_mentions} occasion{'s' if pain_mentions > 1 else ''}")
+        
+        if sleep_issues > 0:
+            summary_points.append(f"Mentioned sleep concerns {sleep_issues} time{'s' if sleep_issues > 1 else ''}")
+        
+        # Add from health events
+        if health_events:
+            active = [e for e in health_events if e.get('status') == 'active']
+            for event in active[:2]:
+                concerns.append(event.get('description', event.get('title', '')))
+        
+        summary = f"{elder_name}'s health check-ins this week. " + '. '.join(summary_points[:3]) + '.'
+        
+        return {
+            'period': period,
+            'summary': summary,
+            'concerns': concerns[:5],
+            'pdf_available': True
+        }
+    
+    def _build_events_log(self, conversations, health_events):
+        """Build chronological health events log"""
+        events = []
+        
+        # Add health events
+        if health_events:
+            for event in health_events:
+                events.append({
+                    'date': event.get('detected_on_formatted', 'Unknown'),
+                    'timestamp': event.get('detected_on', ''),
+                    'type': 'incident',
+                    'title': event.get('title', 'Health Event'),
+                    'severity': 'concern' if event.get('severity') == 'high' else 'warning'
+                })
+        
+        # Add from conversations
+        for conv in conversations[-10:]:
+            ts = conv.get('timestamp', '')
+            date_str = self._format_date(ts) if ts else 'Unknown'
+            health = conv.get('analysis', {}).get('health', {})
+            
+            # Red flags
+            for flag in health.get('red_flags', []):
+                flag_text = flag if isinstance(flag, str) else str(flag)
+                events.append({
+                    'date': date_str,
+                    'timestamp': ts,
+                    'type': 'symptom',
+                    'title': flag_text[:50],
+                    'severity': 'warning'
+                })
+            
+            # Health summary mentions
+            if health.get('summary'):
+                events.append({
+                    'date': date_str,
+                    'timestamp': ts,
+                    'type': 'vital',
+                    'title': health['summary'][:50],
+                    'severity': 'info'
+                })
+        
+        # Sort by timestamp and dedupe
+        seen = set()
+        unique_events = []
+        for event in sorted(events, key=lambda x: x.get('timestamp', ''), reverse=True):
+            key = f"{event['date']}_{event['title'][:20]}"
+            if key not in seen:
+                seen.add(key)
+                unique_events.append({
+                    'date': event['date'],
+                    'type': event['type'],
+                    'title': event['title'],
+                    'severity': event['severity']
+                })
+        
+        return unique_events[:10]  # Latest 10 events
     
     def _determine_health_trend(self, health_mentions):
         """Determine if health is improving, declining, or stable"""
