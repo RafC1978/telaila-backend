@@ -372,9 +372,19 @@ class FamilyDashboardGenerator:
             # Extract stories with rich detail
             stories = bio.get('stories', [])
             for story in stories:
-                topic = story.get('topic', '')
-                details = story.get('details', '')
-                people_involved = story.get('people_involved', [])
+                # Handle both dict and string story formats
+                if isinstance(story, dict):
+                    topic = story.get('topic', '')
+                    details = story.get('details', '')
+                    people_involved = story.get('people_involved', [])
+                elif isinstance(story, str):
+                    # If story is just a string, use it as details
+                    topic = 'story'
+                    details = story
+                    people_involved = []
+                else:
+                    # Skip invalid story format
+                    continue
                 
                 # Categorize the story
                 topic_lower = topic.lower()
