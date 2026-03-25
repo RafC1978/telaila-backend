@@ -1,6 +1,7 @@
 """
 TelAila Beta Tester Management (Production Version)
 Handles persistent registration and data organization using Google Firestore.
+Added: Outbound calling support and scheduling fields.
 """
 
 import secrets
@@ -20,29 +21,38 @@ class BetaTesterManager:
     def register_beta_tester(self, signup_data):
         """
         Register a new beta tester from Lovable signup form into Firestore.
+        Includes production fields for outbound calling and scheduling.
         """
         try:
             # Generate a professional, unique ID (e.g., BT-A1B2C3D4)
-            # We use a random hex to ensure no collisions even with millions of users
             beta_id = f"BT-{secrets.token_hex(4).upper()}"
             access_token = secrets.token_urlsafe(32)
             
             tester_record = {
                 "beta_id": beta_id,
-                "status": "active",  # Changed to active for immediate use
+                "status": "active",
                 "signup_data": signup_data,
                 "access_token": access_token,
                 "registered_at": datetime.now().isoformat(),
                 "agent_id": None,
                 "conversation_count": 0,
                 "last_conversation": None,
-                "setup_instructions_sent": False
+                "setup_instructions_sent": False,
+                
+                # --- PRODUCTION OUTBOUND CALLING FIELDS ---
+                "elder_phone": signup_data.get('elderPhone'),   # Target phone number
+                "scheduled_time": signup_data.get('bestTime'), # e.g. "14:30"
+                "timezone": signup_data.get('timezone', 'America/Vancouver'),
+                "intro_clip_url": None,                         # URL for Susan's recorded message
+                "call_days": signup_data.get('callDays', ['Monday', 'Wednesday', 'Friday']),
+                "consent_given": False                          # Flag for "Handshake" verification
+                # ------------------------------------------
             }
             
             # Save the record to the Firestore collection
             self.db.collection(self.collection).document(beta_id).set(tester_record)
             
-            print(f"✅ Registered beta tester in Firestore: {beta_id} - {signup_data.get('theirName')}")
+            print(f"✅ Registered production-ready tester in Firestore: {beta_id} - {signup_data.get('theirName')}")
             
             return {
                 "success": True,
@@ -50,7 +60,7 @@ class BetaTesterManager:
                 "tester_name": signup_data.get('theirName'),
                 "family_name": signup_data.get('yourName'),
                 "status": "active",
-                "message": "Registration successful! Data is now persistent in Google Cloud.",
+                "message": "Registration successful! Outbound calling profile created.",
                 "access_token": access_token
             }
         except Exception as e:
