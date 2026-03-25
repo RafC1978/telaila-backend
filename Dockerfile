@@ -18,4 +18,4 @@ ENV PORT=8080
 
 # Start the application. 
 # Based on your file list, it looks like 'webhook_server.py' is your main entry point.
-CMD exec gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 webhook_server:app
+CMD ["python", "-m", "gunicorn", "--bind", ":8080", "--workers", "1", "--threads", "8", "--timeout", "0", "webhook_server:app"]
