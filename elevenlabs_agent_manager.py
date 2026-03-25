@@ -1,6 +1,6 @@
 """
 TelAila ElevenLabs Agent Manager (Production Version)
-Handles automated agent creation, personalization, and memory injection.
+Handles automated agent creation, personalization, and the Handshake Protocol.
 """
 
 import os
@@ -11,6 +11,7 @@ from google.cloud import firestore
 class ElevenLabsAgentManager:
     """
     Automates the lifecycle of ElevenLabs Conversational Agents.
+    Includes Handshake Protocol and Outbound Calling.
     """
     
     def __init__(self):
@@ -27,26 +28,39 @@ class ElevenLabsAgentManager:
 
     def create_personalized_agent(self, tester_data):
         """
-        Creates a new, unique ElevenLabs agent for a specific elder.
+        Creates a new, unique ElevenLabs agent with the Handshake Protocol.
         """
         if not self.api_key:
             return None
 
         signup = tester_data['signup_data']
         elder_name = signup.get('theirName', 'Friend')
+        family_name = signup.get('yourName', 'your family')
         
-        # This is the "Soul" of the agent. We build it dynamically.
+        # --- THE HANDSHAKE PROTOCOL ---
+        # This is injected into the prompt to force Aila to verify before chatting.
+        handshake_instructions = f"""
+        MANDATORY STARTUP PROTOCOL:
+        1. Lead with the familiar: "Hi {elder_name}, I'm Aila. {family_name} asked me to call and check in."
+        2. Verify Consent: "Is it okay if we chat for a few minutes so I can keep your stories safe for the family and see how you're feeling?"
+        3. IF USER SAYS NO: Say "I understand. I'll let {family_name} know. Have a wonderful day," and then END THE CONVERSATION.
+        4. IF USER SAYS YES: Proceed to the biography and health check phase.
+        """
+
         system_prompt = f"""
-        You are Aila, a caring and patient companion for {elder_name}. 
+        {handshake_instructions}
+        
+        IDENTITY: 
+        You are Aila, a warm, patient, and caring companion for {elder_name}. 
         Your goal is to reduce loneliness and help build a life biography.
         
-        Context about {elder_name}:
+        KNOWLEDGE OF {elder_name}:
         - Relationship to family: {signup.get('relationship')}
         - Primary Language: {signup.get('primaryLanguage')}
         - Interests/Notes: {signup.get('specialNotes')}
         
-        Style: Warm, curious, and professional. 
-        Ask open-ended questions about their past to help build their biography.
+        STYLE: 
+        Warm, curious, and professional. Use open-ended questions about the past.
         """
 
         payload = {
@@ -54,12 +68,12 @@ class ElevenLabsAgentManager:
             "conversation_config": {
                 "agent": {
                     "prompt": {"prompt": system_prompt},
-                    "first_message": f"Hi {elder_name}, it's Aila. I was just thinking about you and wanted to see how your day is going.",
+                    "first_message": f"Hello {elder_name}, it's Aila. Is this a good time to talk?",
                     "language": "en"
                 },
                 "asr": {"quality": "high"},
                 "tts": {
-                    "voice_id": "21m00Tcm4TlvDq8ikWAM" # Example: 'Rachel' voice. Swap for your preferred ID.
+                    "voice_id": "21m00Tcm4TlvDq8ikWAM" # Rachel
                 }
             }
         }
@@ -69,32 +83,39 @@ class ElevenLabsAgentManager:
             response.raise_for_status()
             agent_info = response.json()
             
-            print(f"✅ Created ElevenLabs Agent: {agent_info['agent_id']} for {elder_name}")
+            print(f"✅ Created Handshake Agent: {agent_info['agent_id']} for {elder_name}")
             return agent_info['agent_id']
             
         except Exception as e:
             print(f"❌ Failed to create ElevenLabs agent: {e}")
             return None
 
-    def update_agent_memory(self, agent_id, latest_insights):
-        """
-        Injects new biography snippets or health notes into the agent's prompt
-        before the next scheduled call.
-        """
-        # 1. Fetch the current agent config
-        # 2. Append 'latest_insights' to the system prompt
-        # 3. PATCH the agent back to ElevenLabs
-        # This ensures Aila "remembers" things from the last call.
-        pass
-
     def initiate_outbound_call(self, agent_id, phone_number):
         """
-        Triggers the ElevenLabs outbound dialer.
+        Triggers the actual phone ring via ElevenLabs Outbound API.
         """
+        if not self.api_key:
+            return {"success": False, "error": "API Key missing"}
+
+        # ElevenLabs Outbound Endpoint (Ensure you have Outbound access enabled)
+        url = f"https://api.elevenlabs.io/v1/convai/agents/{agent_id}/outbound/dial"
+        
         payload = {
-            "agent_id": agent_id,
             "to_number": phone_number
         }
-        # Note: This requires ElevenLabs Outbound API access
-        # response = requests.post(f"{self.base_url}/outbound", headers=self.headers, json=payload)
+
+        try:
+            print(f"📞 Initiating outbound call to {phone_number}...")
+            response = requests.post(url, headers=self.headers, json=payload)
+            response.raise_for_status()
+            return {"success": True, "call_id": response.json().get('call_id')}
+        except Exception as e:
+            print(f"❌ Outbound call failed: {e}")
+            return {"success": False, "error": str(e)}
+
+    def update_agent_memory(self, agent_id, latest_insights):
+        """
+        Injects memory into the agent config so Aila 'remembers' past calls.
+        """
+        # This will be used in Step 3 to patch the agent's prompt with new Bio facts.
         pass
