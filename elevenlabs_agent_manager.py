@@ -33,12 +33,13 @@ class ElevenLabsAgentManager:
         if not self.api_key:
             return None
 
-        signup = tester_data['signup_data']
+        signup = tester_data.get('signup_data', {})
         elder_name = signup.get('theirName', 'Friend')
-        family_name = signup.get('yourName', 'your family')
+        family_name = signup.get('yourName', 'your family member')
         
         # --- THE HANDSHAKE PROTOCOL ---
-        # This is injected into the prompt to force Aila to verify before chatting.
+        # This forces the agent to verify identity and consent before starting.
+        # It references the family member who set up the account for trust.
         handshake_instructions = f"""
         MANDATORY STARTUP PROTOCOL:
         1. Lead with the familiar: "Hi {elder_name}, I'm Aila. {family_name} asked me to call and check in."
@@ -55,12 +56,12 @@ class ElevenLabsAgentManager:
         Your goal is to reduce loneliness and help build a life biography.
         
         KNOWLEDGE OF {elder_name}:
-        - Relationship to family: {signup.get('relationship')}
-        - Primary Language: {signup.get('primaryLanguage')}
-        - Interests/Notes: {signup.get('specialNotes')}
+        - Relationship to family: {signup.get('relationship', 'family')}
+        - Primary Language: {signup.get('primaryLanguage', 'English')}
+        - Interests/Notes: {signup.get('specialNotes', 'N/A')}
         
         STYLE: 
-        Warm, curious, and professional. Use open-ended questions about the past.
+        Warm, curious, and professional. Use open-ended questions about the past to spark memories.
         """
 
         payload = {
@@ -73,12 +74,13 @@ class ElevenLabsAgentManager:
                 },
                 "asr": {"quality": "high"},
                 "tts": {
-                    "voice_id": "21m00Tcm4TlvDq8ikWAM" # Rachel
+                    "voice_id": "21m00Tcm4TlvDq8ikWAM" # 'Rachel' voice - classic warm tone
                 }
             }
         }
 
         try:
+            # Note: Using '/agents/create' for the Conversational AI API
             response = requests.post(f"{self.base_url}/agents/create", headers=self.headers, json=payload)
             response.raise_for_status()
             agent_info = response.json()
@@ -93,12 +95,13 @@ class ElevenLabsAgentManager:
     def initiate_outbound_call(self, agent_id, phone_number):
         """
         Triggers the actual phone ring via ElevenLabs Outbound API.
+        Requires the phone number to be in E.164 format (e.g., +16045550199).
         """
         if not self.api_key:
             return {"success": False, "error": "API Key missing"}
 
-        # ElevenLabs Outbound Endpoint (Ensure you have Outbound access enabled)
-        url = f"https://api.elevenlabs.io/v1/convai/agents/{agent_id}/outbound/dial"
+        # Outbound call endpoint
+        url = f"{self.base_url}/agents/{agent_id}/outbound/dial"
         
         payload = {
             "to_number": phone_number
@@ -113,9 +116,20 @@ class ElevenLabsAgentManager:
             print(f"❌ Outbound call failed: {e}")
             return {"success": False, "error": str(e)}
 
-    def update_agent_memory(self, agent_id, latest_insights):
+    def update_agent_memory(self, agent_id, updated_knowledge_base):
         """
-        Injects memory into the agent config so Aila 'remembers' past calls.
+        Patches the agent's prompt with updated knowledge base (Bio/Health) 
+        so the next call is contextual.
         """
-        # This will be used in Step 3 to patch the agent's prompt with new Bio facts.
+        if not self.api_key:
+            return False
+
+        # This endpoint allows updating an existing agent's configuration
+        url = f"{self.base_url}/agents/{agent_id}"
+        
+        # We wrap the KB into a specific 'Memory' block for the agent's prompt
+        memory_patch = f"\n\nMEMORY OF PAST CONVERSATIONS:\n{updated_knowledge_base}"
+        
+        # In a real update, we would fetch the current prompt and append this.
+        # For now, we'll keep this as a placeholder for the Step 3 implementation.
         pass
