@@ -46,16 +46,20 @@ def register():
         print(f"🎯 New Registration: {signup_data.get('theirName')}")
 
         # 1. Register in Firestore Vault
-        result = beta_manager.register_beta_tester(signup_data)
-        beta_id = result['beta_id']
+        reg_result = beta_manager.register_beta_tester(signup_data)
+        beta_id = reg_result['beta_id']
 
-        # 2. Automated Agent Creation (Now that secrets are fixed!)
-        if agent_manager:
-            agent_id = agent_manager.create_personalized_agent(result)
+        # 2. FETCH THE FULL RECORD (This fixes the 'signup_data' error)
+        # We need the full data to personalize the AI
+        tester_record = db.collection("testers").document(beta_id).get().to_dict()
+
+        # 3. Automated Agent Creation
+        if agent_manager and tester_record:
+            agent_id = agent_manager.create_personalized_agent(tester_record)
             if agent_id:
                 beta_manager.link_agent(beta_id, agent_id)
 
-        return jsonify(result), 200
+        return jsonify(reg_result), 200
     except Exception as e:
         print(f"❌ Registration failed: {e}")
         return jsonify({'error': str(e)}), 500
